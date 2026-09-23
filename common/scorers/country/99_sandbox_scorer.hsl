@@ -1,0 +1,207 @@
+major_rivals_scorer:
+  targets:
+    targets_dynamic(no)
+    target_non_existing(no)
+    target_array(global.majors)
+    # FROM is the initiator, THIS is a target
+    score:
+      base(40)
+      modifier:
+        add(40)
+        has_enemy_ideology_with_FROM()
+        has_war_with_major(no)
+      modifier:
+        factor(0.5)
+        has_government(FROM)
+        has_war_with_major(no)
+      modifier:
+        factor(1_000)
+        has_war_with(FROM)
+      modifier:
+        factor(2)
+        OR:
+          any_owned_state->is_core_of(FROM)
+          FROM->any_owned_state->is_core_of(THIS)
+      modifier:
+        factor(2)
+        FROM in rivals[]
+      modifier:
+        factor(0.25)
+        is_friend_of_FROM()
+      modifier:
+        factor(0)
+        FROM == THIS
+      modifier:
+        factor(0)
+        is_in_faction_with(FROM)
+      modifier:
+        factor(0)
+        is_subject_of(FROM)
+      modifier:
+        factor(0)
+        FROM->is_subject_of(THIS)
+      modifier:
+        factor(0)
+        THIS in FROM.former_rivals[]
+
+minor_rivals_scorer:
+  targets:
+    targets_dynamic(no)
+    target_non_existing(no)
+    target_array(global.countries)
+    # FROM is the initiator, THIS is a target
+    score:
+      base(40)
+      modifier:
+        add(40)
+        is_neighbor_of(FROM)
+      modifier:
+        add(40)
+        is_on_same_continent_as(FROM)
+      modifier:
+        factor(1.25)
+        has_enemy_ideology_with_FROM()
+      modifier:
+        factor(1_000)
+        has_defensive_war_with(FROM)
+      modifier:
+        factor(2)
+        OR:
+          any_owned_state->is_core_of(FROM)
+          FROM->any_owned_state->is_core_of(THIS)
+      modifier:
+        factor(2)
+        FROM in rivals[]
+      modifier:
+        factor(0.25)
+        is_friend_of_FROM()
+      modifier:
+        factor(0)
+        not has_war_with(FROM)
+        NOT->OR:
+          AND:
+            any_controlled_state->is_on_continent(europe)
+            FROM->any_controlled_state->is_on_continent(europe)
+          AND:
+            any_controlled_state->is_on_continent(africa)
+            FROM->any_controlled_state->is_on_continent(africa)
+          AND:
+            any_controlled_state->is_on_continent(middle_east)
+            FROM->any_controlled_state->is_on_continent(middle_east)
+          AND:
+            OR:
+              any_controlled_state->is_on_continent(north_america)
+              any_controlled_state->is_on_continent(south_america)
+            OR:
+              FROM->any_controlled_state->is_on_continent(north_america)
+              FROM->any_controlled_state->is_on_continent(south_america)
+          AND:
+            OR:
+              any_controlled_state->is_on_continent(asia)
+              any_controlled_state->is_on_continent(australia)
+            OR:
+              FROM->any_controlled_state->is_on_continent(asia)
+              FROM->any_controlled_state->is_on_continent(australia)
+      modifier:
+        factor(0)
+        FROM == THIS
+      modifier:
+        factor(0)
+        is_in_faction_with(FROM)
+      modifier:
+        factor(0)
+        is_subject_of(FROM)
+      modifier:
+        factor(0)
+        FROM->is_subject_of(THIS)
+      modifier:
+        factor(0)
+        THIS in FROM.former_rivals[]
+
+# docs/gdd/Scenarios.md "Join levers": open-pool join offers (join 2.0, no fixed
+# tag list). FROM is the aggressor (offer sender), THIS is the candidate.
+# Gates score zero (skipped): self, human, civil war, at war with FROM, in
+# FROM's own faction, subject ties with FROM, enemy ideology with FROM
+# (same group or non-aligned on either side passes). Membership in a THIRD
+# party faction is not a bar: the accept option leaves it first
+# (leave-then-join). Strength plus goodwill stack in three staircases
+# (divisions / industry / opinion, maxima 60/60/60, tunable in the GDD).
+# Numeric engine triggers go through `raw`: a bare `num_divisions > 100`
+# would compile to check_variable, which is wrong here. Industry has no
+# plain trigger at all (num_of_factories is script math), so the effect
+# snapshots it into scenario_join_industry first and the scorer reads the
+# variable (check_variable is correct there).
+scenario_join_scorer:
+  targets:
+    targets_dynamic(no)
+    target_non_existing(no)
+    target_array(global.countries)
+    # FROM is the aggressor, THIS is the candidate
+    score:
+      base(0)
+      modifier:
+        add(5)
+        raw num_divisions > 10
+      modifier:
+        add(10)
+        raw num_divisions > 30
+      modifier:
+        add(15)
+        raw num_divisions > 60
+      modifier:
+        add(15)
+        raw num_divisions > 100
+      modifier:
+        add(15)
+        raw num_divisions > 150
+      modifier:
+        add(10)
+        scenario_join_industry > 10
+      modifier:
+        add(15)
+        scenario_join_industry > 25
+      modifier:
+        add(20)
+        scenario_join_industry > 50
+      modifier:
+        add(15)
+        scenario_join_industry > 80
+      modifier:
+        add(10)
+        raw has_opinion: { target = FROM value > 25 }
+      modifier:
+        add(20)
+        raw has_opinion: { target = FROM value > 50 }
+      modifier:
+        add(30)
+        raw has_opinion: { target = FROM value > 75 }
+      modifier:
+        add(-10)
+        raw has_opinion: { target = FROM value < 0 }
+      modifier:
+        add(-20)
+        raw has_opinion: { target = FROM value < -50 }
+      modifier:
+        factor(0)
+        FROM == THIS
+      modifier:
+        factor(0)
+        is_ai(no)
+      modifier:
+        factor(0)
+        has_civil_war()
+      modifier:
+        factor(0)
+        has_war_with(FROM)
+      modifier:
+        factor(0)
+        is_in_faction_with(FROM)
+      modifier:
+        factor(0)
+        is_subject_of(FROM)
+      modifier:
+        factor(0)
+        FROM->is_subject_of(THIS)
+      modifier:
+        factor(0)
+        has_enemy_ideology_with_FROM()

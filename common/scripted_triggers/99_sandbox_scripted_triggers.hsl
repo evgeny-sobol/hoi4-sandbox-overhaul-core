@@ -1,0 +1,216 @@
+is_sandbox_mode_on:
+  has_global_flag(sandbox_mode_enabled)
+
+is_sandbox_census_country:
+  OR:
+    tag(GER)
+    tag(SOV)
+    tag(ENG)
+    tag(USA)
+    tag(FRA)
+    tag(ITA)
+    tag(JAP)
+    tag(FIN)
+    tag(HUN)
+
+# THIS = target, PREV = would-be attacker. Required Honor band depends on
+# the relation: NAP → Inglorious or worse, guarantee → Dishonorable or worse,
+# faction → Treacherous. Non-friends are always allowed.
+can_PREV_get_wargoal_on_THIS:
+  OR:
+    # Declared scenario enemies never need a band (docs/gdd/Scenarios.md).
+    THIS in PREV.scenario_enemies[]
+    is_friend_of_PREV(no)
+    AND:
+      is_ally_with(PREV)
+      PREV->is_treacherous_leader()
+    AND:
+      not is_ally_with(PREV)
+      is_guaranteed_by(PREV)
+      PREV->is_dishonorable_leader()
+    AND:
+      not is_ally_with(PREV)
+      not is_guaranteed_by(PREV)
+      has_non_aggression_pact_with(PREV)
+      PREV->is_honored_leader(no)
+
+has_same_ideology_as_PREV:
+  custom_trigger_tooltip:
+    tooltip(has_same_ideology_tt)
+    OR:
+      AND:
+        has_government(democratic)
+        PREV->has_government(democratic)
+      AND:
+        has_government(neutrality)
+        PREV->has_government(neutrality)
+      AND:
+        has_government(communism)
+        PREV->has_government(communism)
+      AND:
+        has_government(fascism)
+        PREV->has_government(fascism)
+
+has_enemy_ideology_with_FROM:
+  OR:
+    AND:
+      has_government(communism)
+      FROM->OR:
+        has_government(fascism)
+        has_government(democratic)
+    AND:
+      has_government(democratic)
+      FROM->OR:
+        has_government(communism)
+        has_government(fascism)
+    AND:
+      has_government(fascism)
+      FROM->OR:
+        has_government(democratic)
+        has_government(communism)
+
+has_enemy_ideology_with_PREV:
+  OR:
+    AND:
+      has_government(communism)
+      PREV->OR:
+        has_government(fascism)
+        has_government(democratic)
+    AND:
+      has_government(democratic)
+      PREV->OR:
+        has_government(communism)
+        has_government(fascism)
+    AND:
+      has_government(fascism)
+      PREV->OR:
+        has_government(democratic)
+        has_government(communism)
+
+is_friend_of_PREV:
+  $is_friend_of(PREV)
+
+is_friend_of_ROOT:
+  $is_friend_of(ROOT)
+
+is_friend_of_FROM:
+  $is_friend_of(FROM)
+
+is_honored_leader:
+  custom_override_tooltip:
+    tooltip(LocKey_is_honored_leader_tt)
+    has_country_leader_with_trait(honorable_leader | righteous_leader)
+
+is_dishonorable_leader:
+  custom_override_tooltip:
+    tooltip(LocKey_is_dishonorable_leader_tt)
+    has_country_leader_with_trait(dishonorable_leader | treacherous_leader)
+
+is_treacherous_leader:
+  custom_override_tooltip:
+    tooltip(LocKey_is_treacherous_leader_tt)
+    has_country_leader_with_trait(treacherous_leader)
+
+# Authoritarian or Despotic (tyranny ≥ 25)
+is_authoritarian_leader:
+  custom_override_tooltip:
+    tooltip(LocKey_is_authoritarian_leader_tt)
+    has_country_leader_with_trait(authoritarian_leader | despotic_leader)
+
+# Liberal or Libertarian (tyranny < −25)
+is_liberal_leader:
+  custom_override_tooltip:
+    tooltip(LocKey_is_liberal_leader_tt)
+    has_country_leader_with_trait(liberal_leader | libertarian_leader)
+
+# True when THIS is an existing country with a ruling country leader.
+# add/remove_country_leader_trait error if THIS has no leader (civil-war
+# spawn, government change, or a tag that exists without a character yet).
+has_ruling_country_leader:
+  exists()
+  any_character:
+    is_country_leader()
+
+is_rival_of_PREV:
+  $is_rival_of(PREV)
+
+# Inner-circle / party chancellor foci share 3 advisor slots
+# (GER_ascended_advisor_1/2/3). Vanilla can replace an occupant;
+# sandbox AI should stop after any 3 of those foci.
+GER_sandbox_three_inner_circle_chosen:
+  count_triggers:
+    amount(3)
+    has_completed_focus(GER_ascension_of_todt)
+    has_completed_focus(GER_ascension_of_speer)
+    has_completed_focus(GER_ascension_of_goring)
+    has_completed_focus(GER_ascension_of_himmler)
+    has_completed_focus(GER_ascension_of_goebbels)
+    has_completed_focus(GER_party_chancellor_hess)
+    has_completed_focus(GER_party_chancellor_bormann)
+
+is_rival_of_ROOT:
+  $is_rival_of(ROOT)
+
+# Distinct original_tags currently in a civil war. Cap is 3 (docs/gdd/Civil Wars.md).
+sandbox_civil_war_cap_reached:
+  is_sandbox_mode_on()
+  global.sandbox_civil_war_count >= 3
+
+# AI must not light a new fuse. Do not fold is_ai into the cap trigger:
+# focus ai_will_do is already AI-only, and aiview still needs the country fact.
+sandbox_civil_war_ai_blocked:
+  is_ai(yes)
+  sandbox_civil_war_cap_reached()
+
+# Inverse of ai_blocked. Use this in vanilla `limit` / `trigger` overlays:
+# custom `scripted_trigger = no` is unreliable, so callers want an `= yes` form.
+sandbox_civil_war_ai_allowed:
+  not sandbox_civil_war_ai_blocked()
+
+# ITA BoP range that lights BBA_italy_civil_war.1. Workshop has no ITA.txt BoP
+# file (vanilla fall-through); weekly retry still uses this trigger.
+sandbox_ita_grand_council_total_control:
+  $is_power_balance_in_range(ITA_power_balance, ITA_grand_council_total_control_range)
+
+# ETH BoP total-control ranges that queue BBA_ethiopia_balance_of_power_events.01
+sandbox_eth_rebellion_fuse_ready:
+  not has_country_flag(ETH_rebellion_happened_flag)
+  not has_civil_war()
+  OR:
+    $is_power_balance_in_range(ETH_centralization_balance, ETH_mekwanint_total_control_range)
+    $is_power_balance_in_range(ETH_centralization_balance, ETH_communist_total_control_range)
+  OR:
+    not $has_stability(0.15)
+    raw check_variable: { ROOT.party_popularity@ruling_party < 0.4 }
+
+# on_daily_AST veterans fuse is live (mission delay may also log).
+sandbox_ast_veterans_fuse_ready:
+  has_country_flag(AST_veterans_revolt_active)
+  not has_country_flag(AST_revolt_triggered_early)
+  not has_government(communism)
+  not $has_stability(0.40)
+
+# GRE_the_right_to_rule dispatcher is ready to queue bftb_greece.105.
+sandbox_gre_george_cw_fuse_ready:
+  has_country_flag(GRE_monarchist_civil_war_communist_republican_alliance)
+  has_country_flag(GRE_monarchist_civil_war_factory_raided)
+  has_country_flag(GRE_monarchist_civil_war_generals_returned)
+  has_country_flag(GRE_monarchist_civil_war_riots)
+
+# AFG BoP total-control range that starts a fascist war inline.
+sandbox_afg_bop_cw_fuse_ready:
+  $is_power_balance_in_range(AFG_power_balance, AFG_total_government_influence)
+  not has_government(fascism)
+  not has_country_flag(AFG_had_civil_war_bop)
+  not has_civil_war()
+  not has_war()
+
+# Sunfall MTTH is live enough to log a wait (full vanilla trigger is longer).
+sandbox_jap_sfl_fuse_ready:
+  original_tag($JAP)
+  not has_civil_war()
+  not is_subject()
+  not has_global_flag(jap_civil_war_sf)
+  not has_completed_focus(JAP_the_unthinkable_option)
+  not has_completed_focus(JAP_strengthen_civilian_government)
+  not has_completed_focus(JAP_revoke_the_peace_preservation_law)
