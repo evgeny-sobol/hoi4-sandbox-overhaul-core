@@ -22,10 +22,15 @@ latter is parsed as an on_actions file and rejects anything that is not
 "Unexpected token" and every call site in the skeleton becomes an
 "Invalid effect".
 
-Two hooks cannot be derived from the catalog and stay hand-written in the
+Three hooks cannot be derived from the catalog and stay hand-written in the
 mod's catalog file:
-  sandbox_arc_on_weekly()  - extra weekly fuse retries (e.g. AFG BoP)
-  sandbox_arc_tick_hosts() - extra monthly tick hosts past USA
+  sandbox_arc_on_weekly()              - extra weekly fuse retries (e.g. AFG BoP)
+  sandbox_arc_tick_hosts()             - extra monthly tick hosts past USA
+  sandbox_delay_capped_cw_missions_mod() - extra capped-civil-war mission ids
+
+The last one is called by the core sandbox_delay_capped_cw_missions() loop,
+which keeps only the mission ids that exist in vanilla. A mod appends its own
+ids there so the shared core never references content it does not have.
 
 Usage:
   python tools/extract_arc_hooks.py <mod_dir>
@@ -184,20 +189,27 @@ def build(arcs, aggressors) -> list[str]:
 
 HANDWRITTEN = ("sandbox_arc_on_weekly", "sandbox_arc_tick_hosts")
 
+# Called from the core sandbox_delay_capped_cw_missions() loop. The core keeps
+# only the mission ids that exist in vanilla; a mod appends its own ids here,
+# so every mod must define it (an empty body with `pass` is fine).
+MOD_CATALOG_HOOKS = ("sandbox_delay_capped_cw_missions_mod",)
+
 
 def check_handwritten_hooks(catalog_text: str) -> None:
-    """The skeleton calls all four hooks unconditionally.
+    """Verify the catalog defines every hook the shared core calls.
 
-    The two derivable ones are generated here; the other two must be defined
-    by the mod's catalog or the skeleton call dangles as an invalid effect.
-    A mod with nothing to add writes `pass`.
+    The four arc hooks are called unconditionally by the on_actions skeleton:
+    two are generated here, the other two must come from the mod's catalog or
+    the call dangles as an invalid effect. The mod-missions hook is called by
+    the core weekly mission-delay loop for the same reason. A mod with nothing
+    to add writes `pass`.
     """
-    missing = [n for n in HANDWRITTEN if f"{n}():" not in catalog_text]
+    missing = [n for n in HANDWRITTEN + MOD_CATALOG_HOOKS if f"{n}():" not in catalog_text]
     if missing:
         raise SystemExit(
             f"error: {CATALOG_REL} must define {', '.join(missing)} "
-            "(use `pass` when there is nothing to add); the shared skeleton "
-            "calls all four arc hooks unconditionally"
+            "(use `pass` when there is nothing to add); the shared core calls "
+            "all of them unconditionally"
         )
 
 
