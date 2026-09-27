@@ -2,12 +2,14 @@
 """Generate the per-mod arc hooks file from the mod's scenario catalog.
 
 Reads the per-mod catalog (common/scripted_effects/99_sandbox_scenarios.hsl)
-and writes common/scripted_effects/99_sandbox_arc_hooks.hsl with the two
-catalog functions consumed by the shared on_actions skeleton
+and writes common/scripted_effects/99_sandbox_arc_hooks.hsl with the one
+catalog function consumed by the shared on_actions skeleton
 (core/common/on_actions/99_sandbox_core_on_actions.hsl):
 
   sandbox_arc_wargoal_expire_hook() - sc_goal_end per-arc tag gates
-  sandbox_arc_justify_hook()        - sc_justify per-arc FROM gates
+
+sc_justify is sampled monthly in the catalog s7 telemetry (issue 15), so no
+justify hook is generated.
 
 Both bodies are derived from the catalog itself:
   * the aggressor tag per arc comes from sandbox_seed_actors();
@@ -161,28 +163,6 @@ def build(arcs, aggressors) -> list[str]:
             out.append(f"      if tag({agg} | {' | '.join(tags)}):")
             out.append("        $sandbox_log_sc(sc_goal_end, goal_expired)")
 
-    out += [
-        "",
-        "# sc_justify per-arc FROM gates (daily while active).",
-        "sandbox_arc_justify_hook():",
-    ]
-    for arc in sorted(arcs):
-        agg = aggressors[arc]
-        out.append(
-            f"  if global.sandbox_scenario == {arc} and "
-            f"global.sandbox_scenario_phase < 3 and tag({agg}):"
-        )
-        for v in VARIANTS:
-            tags = arcs[arc][v]
-            out.append(
-                "    if global.sandbox_target_variant == a:"
-                if v == "a"
-                else "    else:"
-            )
-            for tgt in tags:
-                key = f"{agg.lower()}_on_{tgt.lower()}"
-                out.append(f"      if FROM->tag({tgt}):")
-                out.append(f"        $sandbox_log_sc(sc_justify, {key})")
     out.append("")
     return out
 
@@ -198,9 +178,9 @@ MOD_CATALOG_HOOKS = ("sandbox_delay_capped_cw_missions_mod",)
 def check_handwritten_hooks(catalog_text: str) -> None:
     """Verify the catalog defines every hook the shared core calls.
 
-    The four arc hooks are called unconditionally by the on_actions skeleton:
-    two are generated here, the other two must come from the mod's catalog or
-    the call dangles as an invalid effect. The mod-missions hook is called by
+    The arc hooks are called unconditionally by the on_actions skeleton:
+    the expire hook is generated here, the other two must come from the mod's
+    catalog or the call dangles as an invalid effect. The mod-missions hook is called by
     the core weekly mission-delay loop for the same reason. A mod with nothing
     to add writes `pass`.
     """
