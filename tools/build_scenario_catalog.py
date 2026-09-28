@@ -122,9 +122,15 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
             if not isinstance(lst, list) or not lst or any(not isinstance(t, str) for t in lst):
                 errors.append(f"{name}: targets.{variant} must be a non-empty list of tags")
                 continue
+            if len(lst) > 4:
+                errors.append(f"{name}: targets.{variant} holds {len(lst)} tags; derail arms cover 1-4")
             for t in lst:
                 check_tag(t, f"targets.{variant}", known_tags, errors, name)
                 target_tags.append(t)
+
+    key = data.get("key", None)
+    if key is not None and (not isinstance(key, str) or not FUNC_NAME_RE.match(key)):
+        errors.append(f"{name}: key must be an identifier naming the pin trigger and pick label")
 
     ladder = req("ladder", dict)
     if isinstance(ladder, dict):
@@ -531,14 +537,18 @@ def render_labels(specs: list[tuple[str, dict]], spec_id: str) -> str:
 def gen_function_names(spec_id: str) -> dict[str, str]:
     """Generated per-arc function names for every mechanical aspect.
 
-    Only set_targets, seed, tick and telemetry exist yet; later tickets add
-    derail and pick aspects under the same contract.
+    Only set_targets, seed, tick, telemetry, derail and pick aspects exist
+    yet; later tickets add any remaining aspects under the same contract.
     """
     return {
         "set_targets": f"gen_{spec_id}_set_targets",
         "seed": f"gen_{spec_id}_seed",
         "tick": f"gen_{spec_id}_tick",
         "telemetry": f"gen_{spec_id}_telemetry",
+        "derail": f"gen_{spec_id}_derail",
+        "pin": f"gen_{spec_id}_pin",
+        "eligible": f"gen_{spec_id}_eligible",
+        "pick_log": f"gen_{spec_id}_pick_log",
     }
 
 
@@ -579,6 +589,50 @@ def render_telemetry(number: int, aggressor: str, targets: dict[str, list[str]])
                 f"        $sandbox_log_sc(sc_justify, {agg.lower()}_on_{tgt.lower()})",
             ]
     return out
+
+
+def render_derail(number: int, aggressor: str, targets: dict[str, list[str]]) -> list[str]:
+    """Gone and capitulated derail arms for one arc, then the per-variant
+    target arms. Mirrors the hand-written shape it replaces; flip gates
+    arrive with the first gated arc."""
+    agg = aggressor
+    gone = f"{agg.lower()}_gone"
+    capitulated = f"{agg.lower()}_capitulated"
+    out = [
+        f"  if not country_exists({agg}):",
+        "    global.&sandbox_scenario_phase = 3",
+        f"    $sandbox_log_sc(sc_derail, {gone})",
+        f"    $sandbox_log_sc(sc_end, {gone})",
+        f"  elif {agg}->has_capitulated():",
+        "    global.&sandbox_scenario_phase = 3",
+        f"    $sandbox_log_sc(sc_derail, {capitulated})",
+        f"    $sandbox_log_sc(sc_end, {capitulated})",
+        "  else:",
+        "    if global.sandbox_target_variant == a:",
+        f"      $sandbox_check_targets_derail{len(targets['a'])}({agg}, {', '.join(targets['a'])})",
+        "    else:",
+        f"      $sandbox_check_targets_derail{len(targets['b'])}({agg}, {', '.join(targets['b'])})",
+    ]
+    return out
+
+
+def render_pick(names: dict[str, str], number: int, aggressor: str, key: str) -> list[str]:
+    """Pin branch, eligibility entry and pick log for one arc. Three small
+    functions because the hand dispatcher hosts them at three positions."""
+    return [
+        f"{names['pin']}():",
+        f"  if sandbox_scenario_pin_is_{key}():",
+        "    global.&sandbox_scenario_pin = 1",
+        f"    global.&sandbox_scenario = {number}",
+        "",
+        f"{names['eligible']}():",
+        f"  if country_exists({aggressor}):",
+        f"    eligible[].add({number})",
+        "",
+        f"{names['pick_log']}():",
+        f"  if global.sandbox_scenario == {number}:",
+        f"    $sandbox_log_sc(sc_pick, {key})",
+    ]
 
 
 def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
@@ -629,6 +683,13 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
         out.append(f"{names['telemetry']}():")
         out.extend(render_telemetry(number, agg, data["targets"]))
         out.append("")
+        out.append(f"{names['derail']}():")
+        out.extend(render_derail(number, agg, data["targets"]))
+        out.append("")
+        key = data.get("key", None)
+        if isinstance(key, str):
+            out.extend(render_pick(names, number, agg, key))
+            out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 

@@ -334,6 +334,34 @@ gen_axis_expansion_telemetry():
         $sandbox_log_sc(sc_goal, ger_on_eng)
       if is_justifying_wargoal_against(ENG):
         $sandbox_log_sc(sc_justify, ger_on_eng)
+
+gen_axis_expansion_derail():
+  if not country_exists(GER):
+    global.&sandbox_scenario_phase = 3
+    $sandbox_log_sc(sc_derail, ger_gone)
+    $sandbox_log_sc(sc_end, ger_gone)
+  elif GER->has_capitulated():
+    global.&sandbox_scenario_phase = 3
+    $sandbox_log_sc(sc_derail, ger_capitulated)
+    $sandbox_log_sc(sc_end, ger_capitulated)
+  else:
+    if global.sandbox_target_variant == a:
+      $sandbox_check_targets_derail2(GER, CZE, POL)
+    else:
+      $sandbox_check_targets_derail2(GER, FRA, ENG)
+
+gen_axis_expansion_pin():
+  if sandbox_scenario_pin_is_axis():
+    global.&sandbox_scenario_pin = 1
+    global.&sandbox_scenario = 1
+
+gen_axis_expansion_eligible():
+  if country_exists(GER):
+    eligible[].add(1)
+
+gen_axis_expansion_pick_log():
+  if global.sandbox_scenario == 1:
+    $sandbox_log_sc(sc_pick, axis)
 """
 
 
@@ -433,6 +461,22 @@ def test_duplicate_id_fails() -> None:
     r = run(mod)
     assert r.returncode == 1, r.stdout
     assert "duplicate" in r.stdout.lower()
+
+
+def test_bad_key_fails() -> None:
+    bad = GOOD_SPEC.replace('aggressor = "GER"', 'aggressor = "GER"\nkey = "has space"')
+    mod = make_mod({"axis_expansion.toml": bad})
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "key must be an identifier" in r.stdout
+
+
+def test_too_many_targets_fails() -> None:
+    bad = GOOD_SPEC.replace('a = ["CZE", "POL"]', 'a = ["CZE", "POL", "FRA", "ENG", "SOV"]')
+    mod = make_mod({"axis_expansion.toml": bad})
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "derail arms cover 1-4" in r.stdout
 
 
 def test_bad_target_tag_fails() -> None:
