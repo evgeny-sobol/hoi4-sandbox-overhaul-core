@@ -512,8 +512,15 @@ def check_labels(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str]:
         lowered = exact.lower()
         seen[line].add(lowered)
         origins.setdefault((line, lowered), set()).add(source)
-        if lowered in expected[line] and exact != lowered:
-            errors.append(f"{line} label {exact!r} differs in case; want {lowered!r} ({source})")
+        if lowered in expected[line]:
+            if exact != lowered:
+                errors.append(f"{line} label {exact!r} differs in case; want {lowered!r} ({source})")
+        elif source == GEN_HSL_REL.as_posix():
+            # The generated file mirrors the specs exactly: any label there
+            # that no spec expects is a rogue hand-edit, named on the spot.
+            # Hand-catalog labels outside the inventory belong to arcs without
+            # specs (mid-migration) and are skipped.
+            errors.append(f"{line} label {exact!r} in generated file not expected from any spec")
     for line in ("sc_goal", "sc_justify"):
         for label in sorted(expected[line] - seen[line]):
             errors.append(f"{line} label {label!r} expected from specs but missing")

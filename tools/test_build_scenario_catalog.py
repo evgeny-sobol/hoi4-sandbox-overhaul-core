@@ -241,6 +241,18 @@ def test_case_drift_detected() -> None:
     assert "differs in case" in r.stdout
 
 
+def test_gen_rogue_label_detected() -> None:
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
+    assert run(mod).returncode == 0
+    gen = mod / "common" / "scripted_effects" / "99_sandbox_scenarios_gen.hsl"
+    with gen.open("a", encoding="utf-8") as f:
+        f.write("  if has_wargoal_against(X):\n    $sandbox_log_sc(sc_goal, ger_on_zzz)\n")
+    r = run(mod, "--check")
+    assert r.returncode == 1, r.stdout
+    assert "ger_on_zzz" in r.stdout
+    assert "not expected from any spec" in r.stdout
+
+
 def test_reverse_justify_skipped() -> None:
     # A reverse-direction justify label belongs to another arc (where that
     # country is the aggressor); with no spec for it, the check skips it.
