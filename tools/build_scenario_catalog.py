@@ -477,33 +477,46 @@ def expected_labels(specs: list[tuple[str, dict]]) -> dict[str, set[str]]:
     return out
 
 
-def actual_labels(hsl_path: Path) -> dict[str, set[str]]:
-    """Labels logged in the HSL catalog, in their on-disk letter case."""
-    out = {"sc_goal": set(), "sc_justify": set()}
-    if not hsl_path.is_file():
-        return out
-    text = hsl_path.read_text(encoding="utf-8", errors="replace")
-    for line, label in LABEL_RE.findall(text):
-        if line in out:
-            out[line].add(label)
+def label_occurrences(mod_dir: Path) -> list[tuple[str, str, str]]:
+    """Every sc_goal/sc_justify log line as (line, label, source file).
+
+    Both the hand catalog and the generated sibling are scanned, without
+    deduplication: a label living in both files is a migration leftover, and
+    a case-drifted copy must not hide behind a correct one.
+    """
+    out: list[tuple[str, str, str]] = []
+    for rel in (SCENARIO_HSL_REL, GEN_HSL_REL):
+        path = mod_dir / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for line, label in LABEL_RE.findall(text):
+            if line in ("sc_goal", "sc_justify"):
+                out.append((line, label, rel.as_posix()))
     return out
 
 
 def check_labels(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str]:
     errors: list[str] = []
     expected = expected_labels(specs)
-    actual = actual_labels(mod_dir / SCENARIO_HSL_REL)
+    occurrences = label_occurrences(mod_dir)
+    seen: dict[str, set[str]] = {"sc_goal": set(), "sc_justify": set()}
+    origins: dict[tuple[str, str], set[str]] = {}
+    for line, exact, source in occurrences:
+        lowered = exact.lower()
+        seen[line].add(lowered)
+        origins.setdefault((line, lowered), set()).add(source)
+        if lowered in expected[line] and exact != lowered:
+            errors.append(f"{line} label {exact!r} differs in case; want {lowered!r} ({source})")
     for line in ("sc_goal", "sc_justify"):
-        actual_lower = {label.lower(): label for label in actual[line]}
-        for label in sorted(expected[line]):
-            if label not in actual_lower:
-                errors.append(f"{line} label {label!r} expected from specs but missing in {SCENARIO_HSL_REL.as_posix()}")
-        for lowered, exact in sorted(actual_lower.items()):
-            if lowered in expected[line]:
-                if exact != lowered:
-                    errors.append(f"{line} label {exact!r} differs in case; want {lowered!r}")
-            # Anything else belongs to an arc without a spec (mid-migration)
-            # and is skipped.
+        for label in sorted(expected[line] - seen[line]):
+            errors.append(f"{line} label {label!r} expected from specs but missing")
+    for (line, label), sources in sorted(origins.items()):
+        if len(sources) > 1 and label in expected[line]:
+            errors.append(
+                f"{line} label {label!r} logged in both hand catalog and generated file; "
+                "delete the hand-written branch"
+            )
     return errors
 
 
@@ -518,14 +531,54 @@ def render_labels(specs: list[tuple[str, dict]], spec_id: str) -> str:
 def gen_function_names(spec_id: str) -> dict[str, str]:
     """Generated per-arc function names for every mechanical aspect.
 
-    Only set_targets, seed and tick exist yet; later tickets add telemetry,
+    Only set_targets, seed, tick and telemetry exist yet; later tickets add
     derail and pick aspects under the same contract.
     """
     return {
         "set_targets": f"gen_{spec_id}_set_targets",
         "seed": f"gen_{spec_id}_seed",
         "tick": f"gen_{spec_id}_tick",
+        "telemetry": f"gen_{spec_id}_telemetry",
     }
+
+
+def render_telemetry(number: int, aggressor: str, targets: dict[str, list[str]]) -> list[str]:
+    """Monthly s7 sampling for one arc: power per live actor, goal and
+    justify lines per declared pair, both label directions where the
+    convention requires. Mirrors the hand-written shape it replaces."""
+    agg = aggressor
+    out = []
+    for variant in ("a", "b"):
+        out.append(
+            "  if global.sandbox_target_variant == a:"
+            if variant == "a"
+            else "  else:"
+        )
+        out += [
+            f"    {agg}:",
+            "      sc_div = num_divisions",
+            "      sc_fab = num_of_factories",
+            "      $sandbox_log_sc_power()",
+        ]
+        for tgt in targets[variant]:
+            out += [
+                f"    if country_exists({tgt}):",
+                f"      {tgt}:",
+                "        sc_div = num_divisions",
+                "        sc_fab = num_of_factories",
+                "        $sandbox_log_sc_power()",
+                f"        if has_wargoal_against({agg}) or is_justifying_wargoal_against({agg}):",
+                f"          $sandbox_log_sc(sc_goal, {tgt.lower()}_on_{agg.lower()})",
+            ]
+        out.append(f"    {agg}:")
+        for tgt in targets[variant]:
+            out += [
+                f"      if has_wargoal_against({tgt}) or is_justifying_wargoal_against({tgt}):",
+                f"        $sandbox_log_sc(sc_goal, {agg.lower()}_on_{tgt.lower()})",
+                f"      if is_justifying_wargoal_against({tgt}):",
+                f"        $sandbox_log_sc(sc_justify, {agg.lower()}_on_{tgt.lower()})",
+            ]
+    return out
 
 
 def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
@@ -534,7 +587,7 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
     Only specs with a number are emitted (a draft without a number cannot be
     wired into the dispatcher). The tick branch is emitted only when the spec
     declares both ladder content functions; aspects beyond
-    set_targets/seed/tick arrive in later tickets.
+    set_targets/seed/tick/telemetry arrive in later tickets.
     """
     out = [
         "# Generated from docs/scenarios/*.toml by core/tools/build_scenario_catalog.py -",
@@ -573,6 +626,9 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
             out.append("    $sandbox_log_sc(sc_phase, peak)")
             out.append(f"    {peak_func}()")
             out.append("")
+        out.append(f"{names['telemetry']}():")
+        out.extend(render_telemetry(number, agg, data["targets"]))
+        out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 

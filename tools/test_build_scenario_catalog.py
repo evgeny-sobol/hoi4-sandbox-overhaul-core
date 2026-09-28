@@ -121,28 +121,14 @@ n = 2
 """
 
 
-GOAL_LABELS = [
-    "ger_on_cze", "ger_on_pol", "ger_on_fra", "ger_on_eng",
-    "cze_on_ger", "pol_on_ger", "fra_on_ger", "eng_on_ger",
-]
-JUSTIFY_LABELS = ["ger_on_cze", "ger_on_pol", "ger_on_fra", "ger_on_eng"]
-
-
 def default_hsl(*scenarios: int) -> str:
     lines = ["sandbox_set_targets():"]
     for n in scenarios or (1,):
         lines.append(f"  if global.sandbox_scenario == {n}:")
         lines.append("    if global.sandbox_target_variant == a:")
         lines.append("      global.&sandbox_targets[].add(CZE)")
-    lines.append("")
-    lines.append("sandbox_scenario_s7_telemetry():")
-    for label in GOAL_LABELS:
-        lines.append("  if has_wargoal_against(X):")
-        lines.append(f"    $sandbox_log_sc(sc_goal, {label})")
-    for label in JUSTIFY_LABELS:
-        lines.append("  if is_justifying_wargoal_against(X):")
-        lines.append(f"    $sandbox_log_sc(sc_justify, {label})")
-    return "\n".join(lines) + "\n"
+    lines += ["", "sandbox_scenario_s7_telemetry():", "  pass", ""]
+    return "\n".join(lines)
 
 
 def make_mod(spec_files: dict[str, str], graph: str = GRAPH, include: str = INCLUDE,
@@ -234,17 +220,19 @@ def test_labels_emitted_in_catalog() -> None:
     assert "Telemetry labels" in text
 
 
-def test_missing_label_detected() -> None:
-    hsl = default_hsl().replace("$sandbox_log_sc(sc_goal, pol_on_ger)\n", "")
+def test_duplicate_label_detected() -> None:
+    # A label living in both the hand catalog and the generated file means
+    # the old hand-written branch was not deleted; the check must fail.
+    hsl = default_hsl() + '  if has_wargoal_against(X):\n    $sandbox_log_sc(sc_goal, ger_on_cze)\n'
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC}, hsl=hsl)
     assert run(mod).returncode == 0
     r = run(mod, "--check")
     assert r.returncode == 1, r.stdout
-    assert "pol_on_ger" in r.stdout
+    assert "both hand catalog and generated file" in r.stdout
 
 
 def test_case_drift_detected() -> None:
-    hsl = default_hsl().replace("sc_goal, ger_on_cze", "sc_goal, GER_on_CZE")
+    hsl = default_hsl() + '  if has_wargoal_against(X):\n    $sandbox_log_sc(sc_goal, GER_on_CZE)\n'
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC}, hsl=hsl)
     assert run(mod).returncode == 0
     r = run(mod, "--check")
@@ -288,6 +276,64 @@ gen_axis_expansion_tick():
     global.&sandbox_scenario_phase = 2
     $sandbox_log_sc(sc_phase, peak)
     sandbox_fire_axis_peak()
+
+gen_axis_expansion_telemetry():
+  if global.sandbox_target_variant == a:
+    GER:
+      sc_div = num_divisions
+      sc_fab = num_of_factories
+      $sandbox_log_sc_power()
+    if country_exists(CZE):
+      CZE:
+        sc_div = num_divisions
+        sc_fab = num_of_factories
+        $sandbox_log_sc_power()
+        if has_wargoal_against(GER) or is_justifying_wargoal_against(GER):
+          $sandbox_log_sc(sc_goal, cze_on_ger)
+    if country_exists(POL):
+      POL:
+        sc_div = num_divisions
+        sc_fab = num_of_factories
+        $sandbox_log_sc_power()
+        if has_wargoal_against(GER) or is_justifying_wargoal_against(GER):
+          $sandbox_log_sc(sc_goal, pol_on_ger)
+    GER:
+      if has_wargoal_against(CZE) or is_justifying_wargoal_against(CZE):
+        $sandbox_log_sc(sc_goal, ger_on_cze)
+      if is_justifying_wargoal_against(CZE):
+        $sandbox_log_sc(sc_justify, ger_on_cze)
+      if has_wargoal_against(POL) or is_justifying_wargoal_against(POL):
+        $sandbox_log_sc(sc_goal, ger_on_pol)
+      if is_justifying_wargoal_against(POL):
+        $sandbox_log_sc(sc_justify, ger_on_pol)
+  else:
+    GER:
+      sc_div = num_divisions
+      sc_fab = num_of_factories
+      $sandbox_log_sc_power()
+    if country_exists(FRA):
+      FRA:
+        sc_div = num_divisions
+        sc_fab = num_of_factories
+        $sandbox_log_sc_power()
+        if has_wargoal_against(GER) or is_justifying_wargoal_against(GER):
+          $sandbox_log_sc(sc_goal, fra_on_ger)
+    if country_exists(ENG):
+      ENG:
+        sc_div = num_divisions
+        sc_fab = num_of_factories
+        $sandbox_log_sc_power()
+        if has_wargoal_against(GER) or is_justifying_wargoal_against(GER):
+          $sandbox_log_sc(sc_goal, eng_on_ger)
+    GER:
+      if has_wargoal_against(FRA) or is_justifying_wargoal_against(FRA):
+        $sandbox_log_sc(sc_goal, ger_on_fra)
+      if is_justifying_wargoal_against(FRA):
+        $sandbox_log_sc(sc_justify, ger_on_fra)
+      if has_wargoal_against(ENG) or is_justifying_wargoal_against(ENG):
+        $sandbox_log_sc(sc_goal, ger_on_eng)
+      if is_justifying_wargoal_against(ENG):
+        $sandbox_log_sc(sc_justify, ger_on_eng)
 """
 
 
