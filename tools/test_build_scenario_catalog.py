@@ -278,6 +278,16 @@ gen_axis_expansion_set_targets():
 gen_axis_expansion_seed():
   GER:
     sandbox_seed_from_targets()
+
+gen_axis_expansion_tick():
+  if global.sandbox_scenario == 1 and global.sandbox_scenario_phase == 0 and global.sandbox_scenario_arc_months >= 12:
+    global.&sandbox_scenario_phase = 1
+    $sandbox_log_sc(sc_phase, crises)
+    sandbox_fire_axis_crises()
+  elif global.sandbox_scenario == 1 and global.sandbox_scenario_phase == 1 and global.sandbox_scenario_arc_months >= 24:
+    global.&sandbox_scenario_phase = 2
+    $sandbox_log_sc(sc_phase, peak)
+    sandbox_fire_axis_peak()
 """
 
 
@@ -359,6 +369,15 @@ def test_missing_field_fails() -> None:
     r = run(mod)
     assert r.returncode == 1, r.stdout
     assert "status" in r.stdout
+
+
+def test_ladder_content_funcs_come_as_a_pair() -> None:
+    bad = GOOD_SPEC.replace("peak_at_month = 24",
+                            'peak_at_month = 24\ncrises_func = "sandbox_fire_axis_crises"')
+    mod = make_mod({"axis_expansion.toml": bad})
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "come as a pair" in r.stdout
 
 
 def test_duplicate_id_fails() -> None:

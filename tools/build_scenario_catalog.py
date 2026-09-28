@@ -27,6 +27,7 @@ from pathlib import Path
 
 STATUSES = ("ready", "draft")
 TAG_RE = re.compile(r"^[A-Z]{3}$")
+FUNC_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 FOCUS_ID_RE = re.compile(r"\b[A-Z]{2,4}_[A-Za-z0-9_]+\b")
 
 # Aggressor tag -> focus-graph file stem in docs/gdd/National Focuses/.
@@ -134,6 +135,10 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
         cm, pm = ladder.get("crises_at_month"), ladder.get("peak_at_month")
         if isinstance(cm, int) and isinstance(pm, int) and not cm < pm:
             errors.append(f"{name}: ladder.peak_at_month must be after ladder.crises_at_month")
+        funcs = [ladder.get(key, None) for key in ("crises_func", "peak_func")]
+        if any(f is not None for f in funcs):
+            if any(not isinstance(f, str) or not FUNC_NAME_RE.match(f) for f in funcs):
+                errors.append(f"{name}: ladder.crises_func and ladder.peak_func come as a pair of HSL function names")
 
     joiners = req("joiners", dict)
     if isinstance(joiners, dict):
@@ -513,12 +518,13 @@ def render_labels(specs: list[tuple[str, dict]], spec_id: str) -> str:
 def gen_function_names(spec_id: str) -> dict[str, str]:
     """Generated per-arc function names for every mechanical aspect.
 
-    Only set_targets and seed exist yet; later tickets add tick, telemetry,
+    Only set_targets, seed and tick exist yet; later tickets add telemetry,
     derail and pick aspects under the same contract.
     """
     return {
         "set_targets": f"gen_{spec_id}_set_targets",
         "seed": f"gen_{spec_id}_seed",
+        "tick": f"gen_{spec_id}_tick",
     }
 
 
@@ -526,8 +532,9 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
     """Generated mechanics sibling: per-arc functions derived from specs.
 
     Only specs with a number are emitted (a draft without a number cannot be
-    wired into the dispatcher). Aspects beyond set_targets/seed arrive in
-    later tickets.
+    wired into the dispatcher). The tick branch is emitted only when the spec
+    declares both ladder content functions; aspects beyond
+    set_targets/seed/tick arrive in later tickets.
     """
     out = [
         "# Generated from docs/scenarios/*.toml by core/tools/build_scenario_catalog.py -",
@@ -552,6 +559,20 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
         out.append(f"  {agg}:")
         out.append("    sandbox_seed_from_targets()")
         out.append("")
+        ladder = data.get("ladder") or {}
+        crises_func, peak_func = ladder.get("crises_func"), ladder.get("peak_func")
+        if isinstance(crises_func, str) and isinstance(peak_func, str):
+            cm, pm = ladder["crises_at_month"], ladder["peak_at_month"]
+            out.append(f"{names['tick']}():")
+            out.append(f"  if global.sandbox_scenario == {number} and global.sandbox_scenario_phase == 0 and global.sandbox_scenario_arc_months >= {cm}:")
+            out.append("    global.&sandbox_scenario_phase = 1")
+            out.append("    $sandbox_log_sc(sc_phase, crises)")
+            out.append(f"    {crises_func}()")
+            out.append(f"  elif global.sandbox_scenario == {number} and global.sandbox_scenario_phase == 1 and global.sandbox_scenario_arc_months >= {pm}:")
+            out.append("    global.&sandbox_scenario_phase = 2")
+            out.append("    $sandbox_log_sc(sc_phase, peak)")
+            out.append(f"    {peak_func}()")
+            out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
