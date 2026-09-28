@@ -220,10 +220,26 @@ def test_labels_emitted_in_catalog() -> None:
     assert "Telemetry labels" in text
 
 
+def test_shared_pair_no_false_positive() -> None:
+    # The same pair-direction logged by another arc's hand branch (arc 2 has
+    # no spec) must not read as duplication with the generated axis line.
+    hsl = default_hsl() + (
+        "  if global.sandbox_scenario == 2 and global.sandbox_scenario_phase < 3:\n"
+        "    $sandbox_log_sc(sc_goal, eng_on_ger)\n"
+    )
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC}, hsl=hsl)
+    assert run(mod).returncode == 0
+    r = run(mod, "--check")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_duplicate_label_detected() -> None:
-    # A label living in both the hand catalog and the generated file means
-    # the old hand-written branch was not deleted; the check must fail.
-    hsl = default_hsl() + '  if has_wargoal_against(X):\n    $sandbox_log_sc(sc_goal, ger_on_cze)\n'
+    # A label living in both the hand catalog (under a spec'd arc) and the
+    # generated file means the old hand-written branch was not deleted.
+    hsl = default_hsl() + (
+        "  if global.sandbox_scenario == 1 and global.sandbox_scenario_phase < 3:\n"
+        "    $sandbox_log_sc(sc_goal, ger_on_cze)\n"
+    )
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC}, hsl=hsl)
     assert run(mod).returncode == 0
     r = run(mod, "--check")

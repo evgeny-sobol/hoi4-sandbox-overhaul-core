@@ -483,35 +483,52 @@ def expected_labels(specs: list[tuple[str, dict]]) -> dict[str, set[str]]:
     return out
 
 
-def label_occurrences(mod_dir: Path) -> list[tuple[str, str, str]]:
-    """Every sc_goal/sc_justify log line as (line, label, source file).
+FUNC_HEAD_RE = re.compile(r"^(sandbox_\w+)\(\):$")
+ARC_NUM_RE = re.compile(r"global\.sandbox_scenario == (\d+)")
+
+
+def label_occurrences(mod_dir: Path) -> list[tuple[str, str, str, int | None]]:
+    """Every sc_goal/sc_justify log line as (line, label, source file, arc).
 
     Both the hand catalog and the generated sibling are scanned, without
-    deduplication: a label living in both files is a migration leftover, and
-    a case-drifted copy must not hide behind a correct one.
+    deduplication. The arc comes from the enclosing `sandbox_scenario == N`
+    guard, so a label shared by two arcs (each arc logs its own direction of
+    a common pair) is attributed to the arc that logs it; lines outside any
+    guard carry None. A case-drifted copy must not hide behind a correct one.
     """
-    out: list[tuple[str, str, str]] = []
+    out: list[tuple[str, str, str, int | None]] = []
     for rel in (SCENARIO_HSL_REL, GEN_HSL_REL):
         path = mod_dir / rel
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for line, label in LABEL_RE.findall(text):
-            if line in ("sc_goal", "sc_justify"):
-                out.append((line, label, rel.as_posix()))
+        arc: int | None = None
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if FUNC_HEAD_RE.match(line):
+                arc = None
+                continue
+            if line.startswith(("if", "elif")):
+                m = ARC_NUM_RE.search(line)
+                if m:
+                    arc = int(m.group(1))
+            for kind, label in LABEL_RE.findall(raw):
+                if kind in ("sc_goal", "sc_justify"):
+                    out.append((kind, label, rel.as_posix(), arc))
     return out
 
 
 def check_labels(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str]:
     errors: list[str] = []
     expected = expected_labels(specs)
+    spec_numbers = {d["number"] for _, d in specs if isinstance(d.get("number"), int)}
     occurrences = label_occurrences(mod_dir)
     seen: dict[str, set[str]] = {"sc_goal": set(), "sc_justify": set()}
-    origins: dict[tuple[str, str], set[str]] = {}
-    for line, exact, source in occurrences:
+    in_gen: dict[str, set[str]] = {"sc_goal": set(), "sc_justify": set()}
+    for line, exact, source, _ in occurrences:
         lowered = exact.lower()
         seen[line].add(lowered)
-        origins.setdefault((line, lowered), set()).add(source)
+        if source == GEN_HSL_REL.as_posix():
+            in_gen[line].add(lowered)
         if lowered in expected[line]:
             if exact != lowered:
                 errors.append(f"{line} label {exact!r} differs in case; want {lowered!r} ({source})")
@@ -524,10 +541,16 @@ def check_labels(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str]:
     for line in ("sc_goal", "sc_justify"):
         for label in sorted(expected[line] - seen[line]):
             errors.append(f"{line} label {label!r} expected from specs but missing")
-    for (line, label), sources in sorted(origins.items()):
-        if len(sources) > 1 and label in expected[line]:
+    for line, exact, source, arc in occurrences:
+        lowered = exact.lower()
+        if (
+            source != GEN_HSL_REL.as_posix()
+            and arc in spec_numbers
+            and lowered in expected[line]
+            and lowered in in_gen[line]
+        ):
             errors.append(
-                f"{line} label {label!r} logged in both hand catalog and generated file; "
+                f"{line} label {exact!r} logged in both hand catalog and generated file; "
                 "delete the hand-written branch"
             )
     return errors
