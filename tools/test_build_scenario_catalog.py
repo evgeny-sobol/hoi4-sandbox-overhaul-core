@@ -263,6 +263,38 @@ def test_reverse_justify_skipped() -> None:
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+GEN_GOLDEN = """\
+# Generated from docs/scenarios/*.toml by core/tools/build_scenario_catalog.py -
+# do not edit by hand. Hand-written code lives in 99_sandbox_scenarios.hsl.
+
+gen_axis_expansion_set_targets():
+  if global.sandbox_target_variant == a:
+    global.&sandbox_targets[].add(CZE)
+    global.&sandbox_targets[].add(POL)
+  else:
+    global.&sandbox_targets[].add(FRA)
+    global.&sandbox_targets[].add(ENG)
+
+gen_axis_expansion_seed():
+  GER:
+    sandbox_seed_from_targets()
+"""
+
+
+def test_gen_hsl_golden() -> None:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import build_scenario_catalog as b
+    import tomllib
+    spec_path = Path("docs/scenarios/axis_expansion.toml")
+    if not spec_path.is_file():
+        print("SKIP golden: not a mod checkout")
+        return
+    with spec_path.open("rb") as f:
+        data = tomllib.load(f)
+    assert b.render_gen_hsl([("axis_expansion", data)]) == GEN_GOLDEN
+
+
 def test_fork_prefers_path_side() -> None:
     mod = make_mod({"fork_probe.toml": FORK_SPEC}, graph=FORK_GRAPH, include=FORK_INCLUDE,
                    hsl=default_hsl(9))

@@ -450,6 +450,7 @@ def include_path_for(mod_dir: Path, aggressor: str) -> Path:
 
 
 SCENARIO_HSL_REL = Path("common/scripted_effects/99_sandbox_scenarios.hsl")
+GEN_HSL_REL = Path("common/scripted_effects/99_sandbox_scenarios_gen.hsl")
 LABEL_RE = re.compile(r"\$sandbox_log_sc\((sc_goal|sc_justify),\s*([A-Za-z_0-9]+)\)")
 
 
@@ -507,6 +508,51 @@ def render_labels(specs: list[tuple[str, dict]], spec_id: str) -> str:
     goal = ", ".join(sorted(expected["sc_goal"]))
     justify = ", ".join(sorted(expected["sc_justify"]))
     return f"**Telemetry labels**: `sc_goal`: {goal}; `sc_justify`: {justify}."
+
+
+def gen_function_names(spec_id: str) -> dict[str, str]:
+    """Generated per-arc function names for every mechanical aspect.
+
+    Only set_targets and seed exist yet; later tickets add tick, telemetry,
+    derail and pick aspects under the same contract.
+    """
+    return {
+        "set_targets": f"gen_{spec_id}_set_targets",
+        "seed": f"gen_{spec_id}_seed",
+    }
+
+
+def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
+    """Generated mechanics sibling: per-arc functions derived from specs.
+
+    Only specs with a number are emitted (a draft without a number cannot be
+    wired into the dispatcher). Aspects beyond set_targets/seed arrive in
+    later tickets.
+    """
+    out = [
+        "# Generated from docs/scenarios/*.toml by core/tools/build_scenario_catalog.py -",
+        "# do not edit by hand. Hand-written code lives in 99_sandbox_scenarios.hsl.",
+        "",
+    ]
+    for name, data in sorted(specs, key=lambda nd: (nd[1].get("number") or 0, nd[0])):
+        number = data.get("number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        agg = data["aggressor"]
+        names = gen_function_names(data["id"])
+        out.append(f"{names['set_targets']}():")
+        out.append("  if global.sandbox_target_variant == a:")
+        for tgt in data["targets"]["a"]:
+            out.append(f"    global.&sandbox_targets[].add({tgt})")
+        out.append("  else:")
+        for tgt in data["targets"]["b"]:
+            out.append(f"    global.&sandbox_targets[].add({tgt})")
+        out.append("")
+        out.append(f"{names['seed']}():")
+        out.append(f"  {agg}:")
+        out.append("    sandbox_seed_from_targets()")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
 
 
 def stale_graph_errors(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str]:
@@ -610,6 +656,8 @@ def build_mod(mod_dir: Path, vanilla_root: Path | None) -> tuple[int, list[str]]
     graphs = {agg: load_graph(graph_path_for(mod_dir, agg)) for agg in {d["aggressor"] for _, d in specs}}
     catalog = render_catalog(specs, graphs)
     (mod_dir / CATALOG_REL).write_text(catalog, encoding="utf-8")
+    gen_text = render_gen_hsl(specs)
+    (mod_dir / GEN_HSL_REL).write_text(gen_text, encoding="utf-8")
     expected, gerrs = expected_boosts(mod_dir, specs)
     errors.extend(gerrs)
     if errors:
@@ -672,6 +720,12 @@ def check_mod(mod_dir: Path, vanilla_root: Path | None) -> tuple[int, list[str]]
         errors.append(f"missing generated catalog ({CATALOG_REL.as_posix()}); run build")
     elif have_path.read_text(encoding="utf-8") != want_catalog:
         errors.append(f"stale generated catalog ({CATALOG_REL.as_posix()}); run build")
+    want_gen = render_gen_hsl(specs)
+    have_gen = mod_dir / GEN_HSL_REL
+    if not have_gen.is_file():
+        errors.append(f"missing generated mechanics ({GEN_HSL_REL.as_posix()}); run build")
+    elif have_gen.read_text(encoding="utf-8") != want_gen:
+        errors.append(f"stale generated mechanics ({GEN_HSL_REL.as_posix()}); run build")
     expected, gerrs = expected_boosts(mod_dir, specs)
     errors.extend(gerrs)
     cov_errs, strict = coverage(mod_dir, specs)

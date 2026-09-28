@@ -11,9 +11,12 @@ catalog function consumed by the shared on_actions skeleton
 sc_justify is sampled monthly in the catalog s7 telemetry (issue 15), so no
 justify hook is generated.
 
-Both bodies are derived from the catalog itself:
-  * the aggressor tag per arc comes from sandbox_seed_actors();
-  * the target tags per arc and variant come from sandbox_set_targets();
+Both bodies are derived from the catalog itself, with arc specs filling the
+gaps left by generation:
+  * the aggressor tag per arc comes from sandbox_seed_actors(), or from the
+    arc's spec once its branch is a generated call;
+  * the target tags per arc and variant come from sandbox_set_targets(), or
+    from the arc's spec once its branch is a generated call;
   * the wargoal gate is `tag(<aggressor> | <targets...>)`;
   * the justify gate is `tag(<aggressor>)` plus one `FROM->tag(<target>)` per
     target, logged as `sc_justify <aggressor>_on_<target>` (lowercased).
@@ -41,6 +44,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 CATALOG_REL = "common/scripted_effects/99_sandbox_scenarios.hsl"
@@ -112,6 +116,30 @@ def parse_aggressors(body: list[str]) -> dict[int, str]:
         m = TAG_HEAD_RE.match(line)
         if m and arc is not None:
             out[arc] = m.group(1)
+    return out
+
+
+def load_spec_arcs(mod: Path) -> dict[int, tuple[str, dict[str, list[str]]]]:
+    """Arc specs as {number: (aggressor, {variant: [tags]})}.
+
+    A migrated arc's catalog branches are generated calls carrying no tags,
+    so the specs fill those arcs in. Where a spec exists it wins: the hand
+    branch holds no data to disagree with.
+    """
+    out: dict[int, tuple[str, dict[str, list[str]]]] = {}
+    spec_dir = mod / "docs" / "scenarios"
+    if not spec_dir.is_dir():
+        return out
+    for path in sorted(spec_dir.glob("*.toml")):
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+        number = data.get("number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        out[number] = (
+            data["aggressor"],
+            {v: list(data["targets"][v]) for v in ("a", "b")},
+        )
     return out
 
 
@@ -209,6 +237,9 @@ def main() -> None:
 
     arcs = parse_targets(funcs["sandbox_set_targets"])
     aggressors = parse_aggressors(funcs["sandbox_seed_actors"])
+    for number, (agg, tgts) in load_spec_arcs(mod).items():
+        arcs[number] = {v: list(tgts[v]) for v in ("a", "b")}
+        aggressors[number] = agg
     check_consistency(arcs, aggressors)
 
     check_handwritten_hooks(text)
