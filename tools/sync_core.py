@@ -61,6 +61,7 @@ EXPECTED_ONLY_CORE = {
 }
 
 SHARED_MISC = [
+    ".scratch/scripts/check_focus_splices.py",
     ".scratch/scripts/extract_sandbox.py",
     "AGENTS.md",
     "docs/agents/domain.md",
