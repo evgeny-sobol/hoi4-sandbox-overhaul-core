@@ -63,6 +63,7 @@ EXPECTED_ONLY_CORE = {
 SHARED_MISC = [
     ".scratch/scripts/check_derail_arms.py",
     ".scratch/scripts/check_focus_splices.py",
+    ".scratch/scripts/check_if_else.py",
     ".scratch/scripts/check_peak_coverage.py",
     ".scratch/scripts/check_pick_gate.py",
     ".scratch/scripts/extract_sandbox.py",
