@@ -285,7 +285,7 @@ GEN_GOLDEN = """\
 # do not edit by hand. Hand-written code lives in 99_sandbox_scenarios.hsl.
 
 gen_axis_expansion_set_targets():
-  if global.sandbox_target_variant == a:
+  if global.sandbox_target_variant == 0:
     global.&sandbox_targets[].add(CZE)
     global.&sandbox_targets[].add(POL)
   else:
@@ -302,7 +302,7 @@ gen_axis_expansion_tick():
     $sandbox_log_sc(sc_phase, crises)
     sandbox_fire_axis_crises()
   elif global.sandbox_scenario == 1 and global.sandbox_scenario_phase == 1 and global.sandbox_scenario_arc_months >= 24:
-    if global.sandbox_target_variant == a:
+    if global.sandbox_target_variant == 0:
       GER:
         if has_completed_focus(GER_demand_sudetenland):
           global.&sandbox_scenario_phase = 2
@@ -335,18 +335,18 @@ gen_axis_expansion_roll_variant():
   if global.sandbox_scenario == 1:
     variant_roll = randi(0, 1)
     if variant_roll == 0:
-      global.&sandbox_target_variant = a
+      global.&sandbox_target_variant = 0
     else:
-      global.&sandbox_target_variant = b
+      global.&sandbox_target_variant = 1
 
 gen_axis_expansion_log_variant():
-  if global.sandbox_scenario == 1 and global.sandbox_target_variant == a:
+  if global.sandbox_scenario == 1 and global.sandbox_target_variant == 0:
     $sandbox_log_sc(sc_variant, a)
-  elif global.sandbox_scenario == 1 and global.sandbox_target_variant == b:
+  elif global.sandbox_scenario == 1 and global.sandbox_target_variant == 1:
     $sandbox_log_sc(sc_variant, b)
 
 gen_axis_expansion_telemetry():
-  if global.sandbox_target_variant == a:
+  if global.sandbox_target_variant == 0:
     GER:
       sc_div = num_divisions
       sc_fab = num_of_factories
@@ -413,7 +413,7 @@ gen_axis_expansion_derail():
     $sandbox_log_sc(sc_derail, ger_capitulated)
     $sandbox_log_sc(sc_end, ger_capitulated)
   else:
-    if global.sandbox_target_variant == a:
+    if global.sandbox_target_variant == 0:
       $sandbox_check_targets_derail2(GER, CZE, POL)
     else:
       $sandbox_check_targets_derail2(GER, FRA, ENG)
@@ -688,7 +688,7 @@ def test_three_variants_roll_and_tick() -> None:
     assert r.returncode == 0, r.stdout + r.stderr
     gen = (mod / "common" / "scripted_effects" / "99_sandbox_scenarios_gen.hsl").read_text(encoding="utf-8")
     assert "variant_roll = randi(0, 2)" in gen
-    assert "global.&sandbox_target_variant = c" in gen
+    assert "global.&sandbox_target_variant = 2" in gen
     assert "has_completed_focus(GER_a2)" in gen
     assert "has_completed_focus(GER_b2)" in gen
     assert "global.sandbox_scenario_arc_months >= 36" in gen

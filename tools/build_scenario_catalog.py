@@ -342,6 +342,13 @@ def variant_keys(data: dict) -> list[str]:
     return sorted(data["targets"])
 
 
+def vidx(data: dict, variant: str) -> int:
+    """Numeric id of a variant. HoI4 variables are floats: bare-word enum
+    literals (a/b) do not survive a write/read round trip, so the engine
+    only ever sees these indices. Letters stay in log labels only."""
+    return variant_keys(data).index(variant)
+
+
 def path_entries(data: dict) -> list[tuple[frozenset, list[str]]]:
     """(variants, focuses) per path; a missing variants field means shared."""
     keys = variant_keys(data)
@@ -716,8 +723,8 @@ def render_peak_gate(names: dict[str, str], number: int, aggressor: str,
     keys = sorted(data["targets"])
     for i, variant in enumerate(keys):
         tail = path_tail(data, variant)
-        out.append(f"    if global.sandbox_target_variant == {variant}:" if i == 0
-                   else f"    elif global.sandbox_target_variant == {variant}:" if i < len(keys) - 1
+        out.append(f"    if global.sandbox_target_variant == {i}:" if i == 0
+                   else f"    elif global.sandbox_target_variant == {i}:" if i < len(keys) - 1
                    else "    else:")
         out.append(f"      {aggressor}:")
         out.append(f"        if has_completed_focus({tail}):")
@@ -750,7 +757,7 @@ def render_roll_variant(names: dict[str, str], number: int, data: dict) -> list[
         out.append(f"    if variant_roll == {i}:" if i == 0
                    else f"    elif variant_roll == {i}:" if i < len(keys) - 1
                    else "    else:")
-        out.append(f"      global.&sandbox_target_variant = {variant}")
+        out.append(f"      global.&sandbox_target_variant = {i}")
     return out
 
 
@@ -759,8 +766,8 @@ def render_log_variant(names: dict[str, str], number: int, data: dict) -> list[s
     keys = sorted(data["targets"])
     out = [f"{names['log_variant']}():"]
     for i, variant in enumerate(keys):
-        out.append(f"  if global.sandbox_scenario == {number} and global.sandbox_target_variant == {variant}:" if i == 0
-                   else f"  elif global.sandbox_scenario == {number} and global.sandbox_target_variant == {variant}:")
+        out.append(f"  if global.sandbox_scenario == {number} and global.sandbox_target_variant == {i}:" if i == 0
+                   else f"  elif global.sandbox_scenario == {number} and global.sandbox_target_variant == {i}:")
         out.append(f"    $sandbox_log_sc(sc_variant, {variant})")
     return out
 
@@ -774,9 +781,9 @@ def render_telemetry(number: int, aggressor: str, targets: dict[str, list[str]])
     keys = sorted(targets)
     for i, variant in enumerate(keys):
         out.append(
-            f"  if global.sandbox_target_variant == {variant}:"
+            f"  if global.sandbox_target_variant == {i}:"
             if i == 0
-            else f"  elif global.sandbox_target_variant == {variant}:"
+            else f"  elif global.sandbox_target_variant == {i}:"
             if i < len(keys) - 1
             else "  else:"
         )
@@ -827,8 +834,8 @@ def render_derail(number: int, aggressor: str, targets: dict[str, list[str]]) ->
     ]
     dkeys = sorted(targets)
     for i, variant in enumerate(dkeys):
-        out.append(f"    if global.sandbox_target_variant == {variant}:" if i == 0
-                   else f"    elif global.sandbox_target_variant == {variant}:" if i < len(dkeys) - 1
+        out.append(f"    if global.sandbox_target_variant == {i}:" if i == 0
+                   else f"    elif global.sandbox_target_variant == {i}:" if i < len(dkeys) - 1
                    else "    else:")
         out.append(f"      $sandbox_check_targets_derail{len(targets[variant])}({agg}, {', '.join(targets[variant])})")
     return out
@@ -875,8 +882,8 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
         out.append(f"{names['set_targets']}():")
         tkeys = sorted(data["targets"])
         for i, variant in enumerate(tkeys):
-            out.append(f"  if global.sandbox_target_variant == {variant}:" if i == 0
-                       else f"  elif global.sandbox_target_variant == {variant}:" if i < len(tkeys) - 1
+            out.append(f"  if global.sandbox_target_variant == {i}:" if i == 0
+                       else f"  elif global.sandbox_target_variant == {i}:" if i < len(tkeys) - 1
                        else "  else:")
             for tgt in data["targets"][variant]:
                 out.append(f"    global.&sandbox_targets[].add({tgt})")
