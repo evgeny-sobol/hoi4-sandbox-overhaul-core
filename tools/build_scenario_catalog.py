@@ -113,11 +113,12 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
 
     targets = req("targets", dict)
     target_tags: list[str] = []
+    variants: list[str] = []
     if isinstance(targets, dict):
-        for variant in ("a", "b"):
-            if variant not in targets:
-                errors.append(f"{name}: targets missing variant {variant!r}")
-                continue
+        variants = sorted(targets)
+        if not variants:
+            errors.append(f"{name}: targets must declare at least one variant")
+        for variant in variants:
             lst = targets[variant]
             if not isinstance(lst, list) or not lst or any(not isinstance(t, str) for t in lst):
                 errors.append(f"{name}: targets.{variant} must be a non-empty list of tags")
@@ -166,14 +167,42 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
 
     paths = req("paths", list)
     key_focuses: list[str] = []
+    path_entries: list[tuple[frozenset, list[str]]] = []
     if isinstance(paths, list):
         if not paths:
             errors.append(f"{name}: paths must hold at least one path")
         for i, path in enumerate(paths):
-            if not isinstance(path, list) or not path or any(not isinstance(f, str) for f in path):
-                errors.append(f"{name}: paths[{i}] must be a non-empty list of focus ids")
+            if not isinstance(path, dict):
+                errors.append(f"{name}: paths[{i}] must be a table with focuses and optional variants")
                 continue
-            key_focuses.extend(path)
+            focuses = path.get("focuses", None)
+            if not isinstance(focuses, list) or not focuses or any(not isinstance(f, str) for f in focuses):
+                errors.append(f"{name}: paths[{i}].focuses must be a non-empty list of focus ids")
+                continue
+            entry_variants = path.get("variants", None)
+            if entry_variants is None:
+                entry_set = frozenset(variants)
+            elif (not isinstance(entry_variants, list) or not entry_variants
+                    or any(not isinstance(v, str) for v in entry_variants)):
+                errors.append(f"{name}: paths[{i}].variants must be a non-empty list of variant keys")
+                continue
+            else:
+                unknown = [v for v in entry_variants if v not in variants]
+                if unknown:
+                    errors.append(f"{name}: paths[{i}].variants {unknown} are not targets keys")
+                    continue
+                entry_set = frozenset(entry_variants)
+            if not entry_set:
+                errors.append(f"{name}: paths[{i}] covers no variant")
+                continue
+            key_focuses.extend(focuses)
+            path_entries.append((entry_set, focuses))
+    covered: set[str] = set()
+    for entry_set, _focuses in path_entries:
+        covered |= set(entry_set)
+    for variant in variants:
+        if variant not in covered:
+            errors.append(f"{name}: targets.{variant} is covered by no path")
 
     notes = req("notes", str)
     if isinstance(notes, str) and not notes.strip():
@@ -224,7 +253,16 @@ COUNTRY_NAMES = {
 CATALOG_REL = Path("docs/gdd/Scenarios Catalog.md")
 BOOST_ANCHOR = "      $ai_sandbox_modifier()"
 BOOST_INSERT = "      +modifier:\n        $ai_scenario_focus_boost()\n"
-BOOST_MARKER = "$ai_scenario_focus_boost()"
+BOOST_MARKER = "$ai_scenario_focus_boost"
+
+
+def gated_insert(variant: str) -> str:
+    return f"      +modifier:\n        $ai_scenario_focus_boost_variant({variant})\n"
+
+
+def canonical_inserts() -> list[str]:
+    """Every insert shape the splicer owns (plain plus any gated form)."""
+    return [BOOST_INSERT]
 
 
 def load_all_specs(mod_dir: Path) -> tuple[list[tuple[str, dict]], list[str]]:
@@ -299,6 +337,44 @@ def graph_path_for(mod_dir: Path, aggressor: str) -> Path:
     return mod_dir / "docs" / "gdd" / "National Focuses" / f"{stem}.md"
 
 
+def variant_keys(data: dict) -> list[str]:
+    """Declared target variants, sorted. Non-empty for valid specs."""
+    return sorted(data["targets"])
+
+
+def path_entries(data: dict) -> list[tuple[frozenset, list[str]]]:
+    """(variants, focuses) per path; a missing variants field means shared."""
+    keys = variant_keys(data)
+    out = []
+    for path in data["paths"]:
+        vs = path.get("variants", None)
+        out.append((frozenset(keys) if vs is None else frozenset(vs), list(path["focuses"])))
+    return out
+
+
+def boost_plan(data: dict, prereq: dict[str, set[str]], excl: set[tuple[str, str]]) -> dict[str, frozenset | None]:
+    """Focus -> None (shared, plain boost) or the variant set for gated boosts.
+
+    Closure runs per path; a focus used in every variant stays plain, a focus
+    used in a strict subset gets one gated modifier per variant in the set.
+    """
+    keys = variant_keys(data)
+    uses: dict[str, set[str]] = {}
+    for variants, focuses in path_entries(data):
+        keep = boost_set(focuses, prereq, excl)
+        for fid in keep:
+            uses.setdefault(fid, set()).update(variants)
+    return {fid: (None if set(vs) >= set(keys) else frozenset(vs)) for fid, vs in uses.items()}
+
+
+def path_tail(data: dict, variant: str) -> str:
+    """Last focus of the first path listing the variant (file order)."""
+    for variants, focuses in path_entries(data):
+        if variant in variants:
+            return focuses[-1]
+    raise KeyError(f"no path covers variant {variant!r}")
+
+
 def arc_title(spec_id: str) -> str:
     return spec_id.replace("_", " ").capitalize()
 
@@ -364,20 +440,21 @@ def render_catalog(specs: list[tuple[str, dict]], graphs: dict[str, tuple[dict, 
         country = COUNTRY_NAMES.get(agg, stem.capitalize())
         out.append(f"## {country}")
         out.append("")
-        out.append("| # | Aggressor | Arc | Variant A | Variant B | Key focuses | Status |")
-        out.append("|---|---|---|---|---|---|---|")
+        vkeys = sorted({v for _, d in arcs for v in d["targets"]})
+        out.append("| # | Aggressor | Arc | " + " | ".join(f"Variant {v}" for v in vkeys) + " | Key focuses | Status |")
+        out.append("|" + "---|" * (5 + len(vkeys)))
         for name, data in arcs:
-            keys = [f for path in data["paths"] for f in path]
+            keys = [f for _, plist in path_entries(data) for f in plist]
             shorts = ", ".join(f"`{short_focus(f, agg)}`" for f in keys)
+            cols = " | ".join(", ".join(data["targets"].get(v, ())) for v in vkeys)
             out.append(
                 f"| {data.get('number', '-')} | {agg} | {arc_title(data['id'])} "
-                f"| {', '.join(data['targets']['a'])} | {', '.join(data['targets']['b'])} "
-                f"| {shorts} | {data['status']} |"
+                f"| {cols} | {shorts} | {data['status']} |"
             )
         out.append("")
         prereq, excl = graphs[agg]
         for name, data in arcs:
-            keys = [f for path in data["paths"] for f in path]
+            keys = [f for _, plist in path_entries(data) for f in plist]
             out.append(f"### Arc {data.get('number', '-')}: {arc_title(data['id'])}")
             out.append("")
             out.append(data["notes"].strip())
@@ -399,23 +476,50 @@ def split_include_blocks(text: str) -> list[tuple[str, int, int]]:
     return spans
 
 
-def check_splice_file(path: Path, expected: set[str]) -> tuple[set[str], set[str], list[str]]:
-    """Return (missing, unexpected, errors) for one .include file."""
+def required_inserts(gate: frozenset | None) -> list[str]:
+    """Canonical splice lines for one focus: plain when shared, else one gated
+    modifier per variant in the set."""
+    if gate is None:
+        return [BOOST_INSERT]
+    return [gated_insert(v) for v in sorted(gate)]
+
+
+CANONICAL_RE = re.compile(r"      \+modifier:\n        \$ai_scenario_focus_boost(?:_variant)?\([^)\n]*\)\n")
+
+
+def check_splice_file(path: Path, expected: dict[str, frozenset | None]) -> tuple[set[str], set[str], list[str]]:
+    """Return (missing, unexpected, errors) for one .include file.
+
+    Missing counts focuses lacking any required insert; a focus carrying the
+    wrong gate (plain instead of gated or vice versa) reports an error naming
+    the expected shape.
+    """
     text = path.read_text(encoding="utf-8")
     boosted: set[str] = set()
+    errors: list[str] = []
     for fid, start, end in split_include_blocks(text):
         if BOOST_MARKER in text[start:end]:
             boosted.add(fid)
-    return expected - boosted, boosted - expected, []
+    for fid in sorted(expected):
+        spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
+        if fid not in spans:
+            continue
+        block = text[spans[fid][0]:spans[fid][1]]
+        for ins in required_inserts(expected[fid]):
+            if ins not in block:
+                want = "plain" if expected[fid] is None else f"gated {sorted(expected[fid])}"
+                errors.append(f"{path.name}: {fid!r} lacks the {want} boost; run build")
+    return set(expected) - boosted, boosted - set(expected), errors
 
 
-def apply_splice_file(path: Path, expected: set[str], remove_stale: bool = True) -> tuple[int, int, list[str]]:
-    """Converge one .include file to the expected boost set.
+def apply_splice_file(path: Path, expected: dict[str, frozenset | None], remove_stale: bool = True) -> tuple[int, int, list[str]]:
+    """Converge one .include file to the expected boost plan.
 
-    Returns (added, removed, errors). Adds the canonical splice after the
-    sandbox-modifier anchor; with remove_stale, removes the canonical splice
-    from focuses outside the set. Anything else (missing focus, missing
-    anchor, non-canonical boost) is an error.
+    Returns (added, removed, errors). Missing inserts go after the
+    sandbox-modifier anchor; stale canonical inserts come out (for focuses
+    outside the plan only when remove_stale, but always for focuses whose
+    gate changed). Anything else (missing focus, missing anchor,
+    non-canonical boost) is an error.
     """
     text = path.read_text(encoding="utf-8")
     added, removed = 0, 0
@@ -427,29 +531,42 @@ def apply_splice_file(path: Path, expected: set[str], remove_stale: bool = True)
             continue
         start, end = spans[fid]
         block = text[start:end]
-        if BOOST_MARKER in block:
-            continue
-        anchor = BOOST_ANCHOR + "\n"
-        pos = block.find(anchor)
-        if pos < 0:
-            errors.append(f"{path.name}: no splice anchor in {fid!r}")
-            continue
-        ins = start + pos + len(anchor)
-        text = text[:ins] + BOOST_INSERT + text[ins:]
-        added += 1
+        for ins in required_inserts(expected[fid]):
+            if ins in block:
+                continue
+            anchor = BOOST_ANCHOR + "\n"
+            pos = block.find(anchor)
+            if pos < 0:
+                errors.append(f"{path.name}: no splice anchor in {fid!r}")
+                continue
+            at = start + pos + len(anchor)
+            text = text[:at] + ins + text[at:]
+            added += 1
+            spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
+            block = text[start:spans[fid][1]]
+        # Strip canonical inserts this focus should no longer carry.
+        want = set(required_inserts(expected[fid]))
+        found = set(CANONICAL_RE.findall(block))
+        for stale in sorted(found - want):
+            text = text[:start] + block.replace(stale, "", 1) + text[spans[fid][1]:]
+            removed += 1
+            spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
+            block = text[start:spans[fid][1]]
+    for _fid in [fid for fid, _s, _e in split_include_blocks(text)]:
         spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
-    for fid, start, end in split_include_blocks(text):
+        if _fid not in spans:
+            continue
+        start, end = spans[_fid]
         block = text[start:end]
-        if fid not in expected and BOOST_MARKER in block:
+        if _fid not in expected and BOOST_MARKER in block:
             if not remove_stale:
                 continue
-            canonical = BOOST_ANCHOR + "\n" + BOOST_INSERT
-            if canonical in block:
-                text = text[:start] + block.replace(canonical, BOOST_ANCHOR + "\n", 1) + text[end:]
-                removed += 1
-                spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
-            else:
-                errors.append(f"{path.name}: non-canonical boost in {fid!r}; remove by hand")
+            new_block, n = CANONICAL_RE.subn("", block)
+            if n == 0 or BOOST_MARKER in new_block:
+                errors.append(f"{path.name}: non-canonical boost in {_fid!r}; remove by hand")
+                continue
+            text = text[:start] + new_block + text[end:]
+            removed += 1
     if added or removed:
         path.write_text(text, encoding="utf-8")
     return added, removed, errors
@@ -579,7 +696,73 @@ def gen_function_names(spec_id: str) -> dict[str, str]:
         "pin": f"gen_{spec_id}_pin",
         "eligible": f"gen_{spec_id}_eligible",
         "pick_log": f"gen_{spec_id}_pick_log",
+        "roll_variant": f"gen_{spec_id}_roll_variant",
+        "log_variant": f"gen_{spec_id}_log_variant",
     }
+
+
+def render_peak_gate(names: dict[str, str], number: int, aggressor: str,
+                     data: dict, peak_month: int, peak_func: str) -> list[str]:
+    """Peak rung gated on the live path tail (AI aggressors only).
+
+    The rung waits in crises until the AI completes the last focus of the
+    live variant's path; human aggressors and a fallback threshold
+    (peak + 12 months) proceed on schedule. Only completed focuses count:
+    a bypassed tail stalls to the fallback.
+    """
+    out = [
+        f"  elif global.sandbox_scenario == {number} and global.sandbox_scenario_phase == 1 and global.sandbox_scenario_arc_months >= {peak_month}:",
+    ]
+    keys = sorted(data["targets"])
+    for i, variant in enumerate(keys):
+        tail = path_tail(data, variant)
+        out.append(f"    if global.sandbox_target_variant == {variant}:" if i == 0
+                   else f"    elif global.sandbox_target_variant == {variant}:" if i < len(keys) - 1
+                   else "    else:")
+        out.append(f"      {aggressor}:")
+        out.append(f"        if has_completed_focus({tail}):")
+        out.extend(_advance_peak(number, peak_func))
+        out.append(f"        elif {aggressor}->is_ai(no):")
+        out.extend(_advance_peak(number, peak_func))
+        out.append(f"        elif global.sandbox_scenario_arc_months >= {peak_month + 12}:")
+        out.extend(_advance_peak(number, peak_func))
+    return out
+
+
+def _advance_peak(number: int, peak_func: str) -> list[str]:
+    """Phase advance plus peak content, nested one level deeper than usual."""
+    return [
+        "          global.&sandbox_scenario_phase = 2",
+        "          $sandbox_log_sc(sc_phase, peak)",
+        f"          {peak_func}()",
+    ]
+
+
+def render_roll_variant(names: dict[str, str], number: int, data: dict) -> list[str]:
+    """Variant roll over the spec's declared keys (any count)."""
+    keys = sorted(data["targets"])
+    out = [
+        f"{names['roll_variant']}():",
+        f"  if global.sandbox_scenario == {number}:",
+        f"    variant_roll = randi(0, {len(keys) - 1})",
+    ]
+    for i, variant in enumerate(keys):
+        out.append(f"    if variant_roll == {i}:" if i == 0
+                   else f"    elif variant_roll == {i}:" if i < len(keys) - 1
+                   else "    else:")
+        out.append(f"      global.&sandbox_target_variant = {variant}")
+    return out
+
+
+def render_log_variant(names: dict[str, str], number: int, data: dict) -> list[str]:
+    """Variant line for every declared key."""
+    keys = sorted(data["targets"])
+    out = [f"{names['log_variant']}():"]
+    for i, variant in enumerate(keys):
+        out.append(f"  if global.sandbox_scenario == {number} and global.sandbox_target_variant == {variant}:" if i == 0
+                   else f"  elif global.sandbox_scenario == {number} and global.sandbox_target_variant == {variant}:")
+        out.append(f"    $sandbox_log_sc(sc_variant, {variant})")
+    return out
 
 
 def render_telemetry(number: int, aggressor: str, targets: dict[str, list[str]]) -> list[str]:
@@ -588,10 +771,13 @@ def render_telemetry(number: int, aggressor: str, targets: dict[str, list[str]])
     convention requires. Mirrors the hand-written shape it replaces."""
     agg = aggressor
     out = []
-    for variant in ("a", "b"):
+    keys = sorted(targets)
+    for i, variant in enumerate(keys):
         out.append(
-            "  if global.sandbox_target_variant == a:"
-            if variant == "a"
+            f"  if global.sandbox_target_variant == {variant}:"
+            if i == 0
+            else f"  elif global.sandbox_target_variant == {variant}:"
+            if i < len(keys) - 1
             else "  else:"
         )
         out += [
@@ -638,11 +824,13 @@ def render_derail(number: int, aggressor: str, targets: dict[str, list[str]]) ->
         f"    $sandbox_log_sc(sc_derail, {capitulated})",
         f"    $sandbox_log_sc(sc_end, {capitulated})",
         "  else:",
-        "    if global.sandbox_target_variant == a:",
-        f"      $sandbox_check_targets_derail{len(targets['a'])}({agg}, {', '.join(targets['a'])})",
-        "    else:",
-        f"      $sandbox_check_targets_derail{len(targets['b'])}({agg}, {', '.join(targets['b'])})",
     ]
+    dkeys = sorted(targets)
+    for i, variant in enumerate(dkeys):
+        out.append(f"    if global.sandbox_target_variant == {variant}:" if i == 0
+                   else f"    elif global.sandbox_target_variant == {variant}:" if i < len(dkeys) - 1
+                   else "    else:")
+        out.append(f"      $sandbox_check_targets_derail{len(targets[variant])}({agg}, {', '.join(targets[variant])})")
     return out
 
 
@@ -685,12 +873,13 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
         agg = data["aggressor"]
         names = gen_function_names(data["id"])
         out.append(f"{names['set_targets']}():")
-        out.append("  if global.sandbox_target_variant == a:")
-        for tgt in data["targets"]["a"]:
-            out.append(f"    global.&sandbox_targets[].add({tgt})")
-        out.append("  else:")
-        for tgt in data["targets"]["b"]:
-            out.append(f"    global.&sandbox_targets[].add({tgt})")
+        tkeys = sorted(data["targets"])
+        for i, variant in enumerate(tkeys):
+            out.append(f"  if global.sandbox_target_variant == {variant}:" if i == 0
+                       else f"  elif global.sandbox_target_variant == {variant}:" if i < len(tkeys) - 1
+                       else "  else:")
+            for tgt in data["targets"][variant]:
+                out.append(f"    global.&sandbox_targets[].add({tgt})")
         out.append("")
         out.append(f"{names['seed']}():")
         out.append(f"  {agg}:")
@@ -705,11 +894,12 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
             out.append("    global.&sandbox_scenario_phase = 1")
             out.append("    $sandbox_log_sc(sc_phase, crises)")
             out.append(f"    {crises_func}()")
-            out.append(f"  elif global.sandbox_scenario == {number} and global.sandbox_scenario_phase == 1 and global.sandbox_scenario_arc_months >= {pm}:")
-            out.append("    global.&sandbox_scenario_phase = 2")
-            out.append("    $sandbox_log_sc(sc_phase, peak)")
-            out.append(f"    {peak_func}()")
+            out.extend(render_peak_gate(names, number, agg, data, pm, peak_func))
             out.append("")
+        out.extend(render_roll_variant(names, number, data))
+        out.append("")
+        out.extend(render_log_variant(names, number, data))
+        out.append("")
         out.append(f"{names['telemetry']}():")
         out.extend(render_telemetry(number, agg, data["targets"]))
         out.append("")
@@ -742,8 +932,8 @@ def stale_graph_errors(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str
     return errors
 
 
-def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[str, set[str]], list[str]]:
-    """Aggressor -> expected boost set, loading each graph once."""
+def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[str, dict[str, frozenset | None]], list[str]]:
+    """Aggressor -> boost plan (focus -> None shared, or the gated variant set)."""
     errors: list[str] = []
     graphs: dict[str, tuple[dict, set]] = {}
     for _, data in specs:
@@ -754,14 +944,20 @@ def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[
                 errors.append(f"no focus graph for aggressor {agg}")
                 continue
             graphs[agg] = load_graph(graph)
-    out: dict[str, set[str]] = {}
+    out: dict[str, dict[str, frozenset | None]] = {}
     for _, data in specs:
         agg = data["aggressor"]
         if agg not in graphs:
             continue
         prereq, excl = graphs[agg]
-        keys = [f for path in data["paths"] for f in path]
-        out.setdefault(agg, set()).update(boost_set(keys, prereq, excl))
+        plan = boost_plan(data, prereq, excl)
+        merged = out.setdefault(agg, {})
+        for fid, gate in plan.items():
+            if fid in merged:
+                prev = merged[fid]
+                merged[fid] = None if prev is None or gate is None else prev | gate
+            else:
+                merged[fid] = gate
     return out, errors
 
 

@@ -67,10 +67,6 @@ aggressor = "GER"
 
 targets = { a = ["CZE"], b = ["FRA"] }
 
-paths = [
-  ["GER_fork_a", "GER_fork_c"],
-]
-
 notes = "Fork probe."
 
 [ladder]
@@ -80,6 +76,9 @@ peak_at_month = 24
 [joiners]
 select = "top_n_by_scorer"
 n = 2
+
+[[paths]]
+focuses = ["GER_fork_a", "GER_fork_c"]
 """
 
 FORK_INCLUDE = """\
@@ -102,22 +101,24 @@ id = "axis_expansion"
 number = 1
 status = "ready"
 aggressor = "GER"
+key = "axis"
 
 targets = { a = ["CZE", "POL"], b = ["FRA", "ENG"] }
-
-paths = [
-  ["GER_remilitarize_the_rhineland", "GER_anschluss", "GER_demand_sudetenland"],
-]
 
 notes = "Rationale."
 
 [ladder]
 crises_at_month = 12
 peak_at_month = 24
+crises_func = "sandbox_fire_axis_crises"
+peak_func = "sandbox_fire_axis_peak"
 
 [joiners]
 select = "top_n_by_scorer"
 n = 2
+
+[[paths]]
+focuses = ["GER_remilitarize_the_rhineland", "GER_anschluss", "GER_demand_sudetenland"]
 """
 
 
@@ -301,9 +302,48 @@ gen_axis_expansion_tick():
     $sandbox_log_sc(sc_phase, crises)
     sandbox_fire_axis_crises()
   elif global.sandbox_scenario == 1 and global.sandbox_scenario_phase == 1 and global.sandbox_scenario_arc_months >= 24:
-    global.&sandbox_scenario_phase = 2
-    $sandbox_log_sc(sc_phase, peak)
-    sandbox_fire_axis_peak()
+    if global.sandbox_target_variant == a:
+      GER:
+        if has_completed_focus(GER_demand_sudetenland):
+          global.&sandbox_scenario_phase = 2
+          $sandbox_log_sc(sc_phase, peak)
+          sandbox_fire_axis_peak()
+        elif GER->is_ai(no):
+          global.&sandbox_scenario_phase = 2
+          $sandbox_log_sc(sc_phase, peak)
+          sandbox_fire_axis_peak()
+        elif global.sandbox_scenario_arc_months >= 36:
+          global.&sandbox_scenario_phase = 2
+          $sandbox_log_sc(sc_phase, peak)
+          sandbox_fire_axis_peak()
+    else:
+      GER:
+        if has_completed_focus(GER_demand_sudetenland):
+          global.&sandbox_scenario_phase = 2
+          $sandbox_log_sc(sc_phase, peak)
+          sandbox_fire_axis_peak()
+        elif GER->is_ai(no):
+          global.&sandbox_scenario_phase = 2
+          $sandbox_log_sc(sc_phase, peak)
+          sandbox_fire_axis_peak()
+        elif global.sandbox_scenario_arc_months >= 36:
+          global.&sandbox_scenario_phase = 2
+          $sandbox_log_sc(sc_phase, peak)
+          sandbox_fire_axis_peak()
+
+gen_axis_expansion_roll_variant():
+  if global.sandbox_scenario == 1:
+    variant_roll = randi(0, 1)
+    if variant_roll == 0:
+      global.&sandbox_target_variant = a
+    else:
+      global.&sandbox_target_variant = b
+
+gen_axis_expansion_log_variant():
+  if global.sandbox_scenario == 1 and global.sandbox_target_variant == a:
+    $sandbox_log_sc(sc_variant, a)
+  elif global.sandbox_scenario == 1 and global.sandbox_target_variant == b:
+    $sandbox_log_sc(sc_variant, b)
 
 gen_axis_expansion_telemetry():
   if global.sandbox_target_variant == a:
@@ -395,15 +435,14 @@ gen_axis_expansion_pick_log():
 
 def test_gen_hsl_golden() -> None:
     import sys
+    import textwrap
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import build_scenario_catalog as b
     import tomllib
-    spec_path = Path("docs/scenarios/axis_expansion.toml")
-    if not spec_path.is_file():
-        print("SKIP golden: not a mod checkout")
-        return
-    with spec_path.open("rb") as f:
-        data = tomllib.load(f)
+    body = GOOD_SPEC
+    if body.startswith("\\"):
+        body = body[2:] if body[1:2] == "\n" else body[1:]
+    data = tomllib.loads(textwrap.dedent(body))
     assert b.render_gen_hsl([("axis_expansion", data)]) == GEN_GOLDEN
 
 
@@ -474,8 +513,7 @@ def test_missing_field_fails() -> None:
 
 
 def test_ladder_content_funcs_come_as_a_pair() -> None:
-    bad = GOOD_SPEC.replace("peak_at_month = 24",
-                            'peak_at_month = 24\ncrises_func = "sandbox_fire_axis_crises"')
+    bad = GOOD_SPEC.replace('peak_func = "sandbox_fire_axis_peak"\n', '')
     mod = make_mod({"axis_expansion.toml": bad})
     r = run(mod)
     assert r.returncode == 1, r.stdout
@@ -492,7 +530,7 @@ def test_duplicate_id_fails() -> None:
 
 
 def test_bad_key_fails() -> None:
-    bad = GOOD_SPEC.replace('aggressor = "GER"', 'aggressor = "GER"\nkey = "has space"')
+    bad = GOOD_SPEC.replace('key = "axis"', 'key = "has space"')
     mod = make_mod({"axis_expansion.toml": bad})
     r = run(mod)
     assert r.returncode == 1, r.stdout
@@ -523,6 +561,157 @@ def test_real_vanilla_spec_passes() -> None:
         return
     r = run(mod, "--check")
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+VARIANT_GRAPH = """\
+# GER_root
+
+```mermaid
+flowchart TD
+    n1["GER_shared"]
+    n2["GER_a1"]
+    n3["GER_a2"]
+    n4["GER_b1"]
+    n5["GER_b2"]
+    n1 --> n2
+    n2 --> n3
+    n1 --> n4
+    n4 --> n5
+```
+"""
+
+VARIANT_INCLUDE = """\
+  focus[id = GER_shared]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_a1]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_a2]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_b1]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_b2]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+"""
+
+VARIANT_SPEC = """\
+id = "variant_probe"
+number = 9
+status = "draft"
+aggressor = "GER"
+
+targets = { a = ["CZE"], b = ["FRA"] }
+
+notes = "Variant probe."
+
+[ladder]
+crises_at_month = 12
+peak_at_month = 24
+
+[joiners]
+select = "top_n_by_scorer"
+n = 2
+
+[[paths]]
+variants = ["a"]
+focuses = ["GER_a1", "GER_a2"]
+
+[[paths]]
+variants = ["b"]
+focuses = ["GER_b1", "GER_b2"]
+"""
+
+THREE_SPEC = """\
+id = "three_probe"
+number = 9
+status = "draft"
+aggressor = "GER"
+
+targets = { a = ["CZE"], b = ["FRA"], c = ["POL"] }
+
+notes = "Three-variant probe."
+
+[ladder]
+crises_at_month = 12
+peak_at_month = 24
+crises_func = "sandbox_fire_probe_crises"
+peak_func = "sandbox_fire_probe_peak"
+
+[joiners]
+select = "top_n_by_scorer"
+n = 2
+
+[[paths]]
+variants = ["a"]
+focuses = ["GER_a1", "GER_a2"]
+
+[[paths]]
+variants = ["b", "c"]
+focuses = ["GER_b1", "GER_b2"]
+"""
+
+
+def test_gated_boost_per_variant() -> None:
+    mod = make_mod({"variant_probe.toml": VARIANT_SPEC}, graph=VARIANT_GRAPH,
+                   include=VARIANT_INCLUDE, hsl=default_hsl(9))
+    r = run(mod)
+    assert r.returncode == 0, r.stdout + r.stderr
+    inc = (mod / "common" / "national_focus" / "germany.include").read_text(encoding="utf-8")
+
+    def block(fid):
+        return inc.split(fid)[1].split("focus[id")[0]
+
+    assert "$ai_scenario_focus_boost()" in block("GER_shared")
+    assert "$ai_scenario_focus_boost_variant(a)" in block("GER_a1")
+    assert "$ai_scenario_focus_boost_variant(a)" in block("GER_a2")
+    assert "$ai_scenario_focus_boost_variant(b)" in block("GER_b1")
+    assert "$ai_scenario_focus_boost_variant(b)" in block("GER_b2")
+    assert "$ai_scenario_focus_boost_variant(b)" not in block("GER_a1")
+    assert "$ai_scenario_focus_boost()" not in block("GER_a1").replace(
+        "$ai_scenario_focus_boost_variant(a)", "")
+    assert run(mod, "--check").returncode == 0
+
+
+def test_three_variants_roll_and_tick() -> None:
+    mod = make_mod({"three_probe.toml": THREE_SPEC}, graph=VARIANT_GRAPH,
+                   include=VARIANT_INCLUDE, hsl=default_hsl(9))
+    r = run(mod)
+    assert r.returncode == 0, r.stdout + r.stderr
+    gen = (mod / "common" / "scripted_effects" / "99_sandbox_scenarios_gen.hsl").read_text(encoding="utf-8")
+    assert "variant_roll = randi(0, 2)" in gen
+    assert "global.&sandbox_target_variant = c" in gen
+    assert "has_completed_focus(GER_a2)" in gen
+    assert "has_completed_focus(GER_b2)" in gen
+    assert "global.sandbox_scenario_arc_months >= 36" in gen
+    assert "->is_ai(no)" in gen
+
+
+def test_uncovered_variant_fails() -> None:
+    bad = THREE_SPEC.replace('targets = { a = ["CZE"], b = ["FRA"], c = ["POL"] }',
+                             'targets = { a = ["CZE"], b = ["FRA"], c = ["POL"], d = ["ENG"] }')
+    mod = make_mod({"three_probe.toml": bad}, graph=VARIANT_GRAPH,
+                   include=VARIANT_INCLUDE, hsl=default_hsl(9))
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "covered by no path" in r.stdout
+
+
+def test_unknown_path_variant_fails() -> None:
+    bad = VARIANT_SPEC.replace('variants = ["a"]', 'variants = ["z"]', 1)
+    mod = make_mod({"variant_probe.toml": bad}, graph=VARIANT_GRAPH,
+                   include=VARIANT_INCLUDE, hsl=default_hsl(9))
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "not targets keys" in r.stdout
 
 
 def main() -> int:
