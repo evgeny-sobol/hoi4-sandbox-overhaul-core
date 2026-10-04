@@ -477,16 +477,75 @@ def test_spec_number_missing_from_code_fails() -> None:
     assert "matches no arc" in r.stdout
 
 
-def test_migration_mode_is_additive() -> None:
-    mod = make_mod({"axis_expansion.toml": GOOD_SPEC}, hsl=default_hsl(1, 2))
+def test_stale_boost_pruned_on_apply() -> None:
+    # Issue 30: an out-of-plan focus is stripped of both owned splices on
+    # apply, and --check fails until it is.
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC}, hsl=default_hsl())
     inc = mod / "common" / "national_focus" / "germany.include"
     text = inc.read_text(encoding="utf-8")
-    text += '  focus[id = GER_stray_focus]:\n    ai_will_do:\n      +modifier:\n        $ai_sandbox_modifier()\n      +modifier:\n        $ai_scenario_focus_boost()\n'
+    text += (
+        '  focus[id = GER_stray_focus]:\n'
+        '    ai_will_do:\n'
+        '      +modifier:\n'
+        '        $ai_sandbox_modifier()\n'
+        '      +modifier:\n'
+        '        $ai_scenario_focus_boost()\n'
+        '    +completion_reward:\n'
+        '      $sandbox_log_sc_focus(GER_stray_focus)\n'
+    )
     inc.write_text(text, encoding="utf-8")
-    assert run(mod).returncode == 0
     r = run(mod, "--check")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "belongs to an arc without a spec" in r.stdout
+    assert r.returncode == 1, r.stdout
+    assert "GER_stray_focus" in r.stdout
+    assert run(mod).returncode == 0
+    after = inc.read_text(encoding="utf-8")
+    stray = after.split("GER_stray_focus")[1].split("focus[id")[0]
+    assert "$ai_scenario_focus_boost" not in stray
+    assert "$sandbox_log_sc_focus(GER_stray_focus)" not in after
+    assert run(mod, "--check").returncode == 0
+
+
+def focus_block(inc: str, fid: str) -> str:
+    for chunk in inc.split("focus[id = ")[1:]:
+        if chunk.startswith(fid):
+            return chunk
+    raise AssertionError(f"focus {fid!r} not found")
+
+
+def test_focus_log_added_on_apply() -> None:
+    # Issue 31: every boosted focus carries one sc_focus block for its id.
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
+    assert run(mod).returncode == 0
+    inc = (mod / "common" / "national_focus" / "germany.include").read_text(encoding="utf-8")
+    for fid in ("GER_remilitarize_the_rhineland", "GER_anschluss", "GER_demand_sudetenland"):
+        block = focus_block(inc, fid)
+        assert "+completion_reward:" in block, fid
+        assert f"$sandbox_log_sc_focus({fid})" in block, fid
+
+
+def test_missing_focus_log_detected() -> None:
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
+    assert run(mod).returncode == 0
+    inc = mod / "common" / "national_focus" / "germany.include"
+    text = inc.read_text(encoding="utf-8")
+    text = text.replace(
+        "    +completion_reward:\n      $sandbox_log_sc_focus(GER_anschluss)\n", "", 1)
+    inc.write_text(text, encoding="utf-8")
+    r = run(mod, "--check")
+    assert r.returncode == 1, r.stdout
+    assert "sc_focus" in r.stdout
+    assert run(mod).returncode == 0
+    assert "$sandbox_log_sc_focus(GER_anschluss)" in inc.read_text(encoding="utf-8")
+
+
+def test_focus_log_idempotent() -> None:
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
+    assert run(mod).returncode == 0
+    inc = mod / "common" / "national_focus" / "germany.include"
+    before = inc.read_bytes()
+    assert run(mod).returncode == 0
+    assert inc.read_bytes() == before
+    assert run(mod, "--check").returncode == 0
 
 
 def test_check_mode_passes() -> None:
