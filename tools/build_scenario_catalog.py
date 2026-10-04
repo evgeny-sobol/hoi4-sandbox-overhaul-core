@@ -208,7 +208,15 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
     if isinstance(notes, str) and not notes.strip():
         errors.append(f"{name}: notes must not be empty")
 
-    if isinstance(aggressor, str) and TAG_RE.match(aggressor) and key_focuses:
+    suppress = data.get("suppress", [])
+    if not isinstance(suppress, list) or any(not isinstance(f, str) for f in suppress):
+        errors.append(f"{name}: suppress must be a list of focus ids")
+        suppress = []
+    clash = sorted(set(suppress) & set(key_focuses))
+    if clash:
+        errors.append(f"{name}: suppress focuses are also in a path: {clash}")
+
+    if isinstance(aggressor, str) and TAG_RE.match(aggressor) and (key_focuses or suppress):
         stem = GRAPH_ALIASES.get(aggressor, aggressor.lower())
         graph_path = graphs_dir / f"{stem}.md"
         if not graph_path.is_file():
@@ -219,6 +227,9 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
             for fid in key_focuses:
                 if fid not in graph_ids:
                     errors.append(f"{name}: key focus {fid!r} not in {graph_path.name}")
+            for fid in suppress:
+                if fid not in graph_ids:
+                    errors.append(f"{name}: suppress focus {fid!r} not in {graph_path.name}")
 
     return errors
 
@@ -268,6 +279,13 @@ def gated_insert(variant: str) -> str:
 
 def log_insert(focus_id: str) -> str:
     return f"    +completion_reward:\n      $sandbox_log_sc_focus({focus_id})\n"
+
+
+SUPPRESS_MARKER = "$ai_scenario_focus_suppress"
+
+
+def suppress_insert() -> str:
+    return "      +modifier:\n        $ai_scenario_focus_suppress()\n"
 
 
 def canonical_inserts() -> list[str]:
@@ -503,21 +521,24 @@ def required_inserts(gate: frozenset | None) -> list[str]:
 
 CANONICAL_RE = re.compile(r"      \+modifier:\n        \$ai_scenario_focus_boost(?:_variant)?\([^)\n]*\)\n")
 FOCUS_LOG_RE = re.compile(r"    \+completion_reward:\n      \$sandbox_log_sc_focus\([^)\n]*\)\n")
+SUPPRESS_RE = re.compile(r"      \+modifier:\n        \$ai_scenario_focus_suppress\(\)\n")
 
 
-def check_splice_file(path: Path, expected: dict[str, frozenset | None]) -> tuple[set[str], set[str], list[str]]:
+def check_splice_file(path: Path, expected: dict[str, frozenset | None], suppressed: set[str]) -> tuple[set[str], set[str], list[str]]:
     """Return (missing, unexpected, errors) for one .include file.
 
-    Both owned splices are checked: the boost modifier and the sc_focus
-    completion_reward block. A focus in the plan must carry its required boost
-    shape and exactly one sc_focus block; a focus outside the plan carrying
-    either marker is unexpected. A marker the canonical regex does not own
-    (wrong indent, hand-edited body) is an error, never converged silently.
+    Three owned splices: the boost modifier, the sc_focus completion_reward
+    block, and the suppress modifier (factor 0 for the AI while the arc is
+    live). A focus in the boost plan must carry its boost shape and one
+    sc_focus block; a focus in the suppress set must carry the suppress
+    modifier; a focus outside both carrying any marker is unexpected. A marker
+    the canonical regex does not own is an error, never converged silently.
     """
     text = path.read_text(encoding="utf-8")
     spans = {fid: (s, e) for fid, s, e in split_include_blocks(text)}
     boosted: set[str] = set()
     logged: set[str] = set()
+    suppressed_present: set[str] = set()
     errors: list[str] = []
     for fid, start, end in split_include_blocks(text):
         block = text[start:end]
@@ -525,6 +546,8 @@ def check_splice_file(path: Path, expected: dict[str, frozenset | None]) -> tupl
             boosted.add(fid)
         if FOCUS_LOG_MARKER in block:
             logged.add(fid)
+        if SUPPRESS_MARKER in block:
+            suppressed_present.add(fid)
     for fid in sorted(expected):
         if fid not in spans:
             continue
@@ -535,82 +558,111 @@ def check_splice_file(path: Path, expected: dict[str, frozenset | None]) -> tupl
                 errors.append(f"{path.name}: {fid!r} lacks the {want} boost; run build")
         if log_insert(fid) not in block:
             errors.append(f"{path.name}: {fid!r} lacks the sc_focus log; run build")
-    for fid in sorted(boosted | logged):
-        if fid not in expected:
+        if SUPPRESS_MARKER in block:
+            errors.append(f"{path.name}: {fid!r} is both boosted and suppressed; run build")
+    for fid in sorted(suppressed):
+        if fid not in spans:
+            errors.append(f"{path.name}: suppressed focus {fid!r} not found")
+            continue
+        if suppress_insert() not in text[spans[fid][0]:spans[fid][1]]:
+            errors.append(f"{path.name}: {fid!r} lacks the suppress modifier; run build")
+    for fid in sorted(boosted | logged | suppressed_present):
+        if fid not in expected and fid not in suppressed:
             continue
         block = text[spans[fid][0]:spans[fid][1]]
         if BOOST_MARKER in block and CANONICAL_RE.search(block) is None:
             errors.append(f"{path.name}: non-canonical boost in {fid!r}; run build or fix by hand")
         if FOCUS_LOG_MARKER in block and FOCUS_LOG_RE.search(block) is None:
             errors.append(f"{path.name}: non-canonical sc_focus in {fid!r}; run build or fix by hand")
-    return set(expected) - boosted, (boosted | logged) - set(expected), errors
+        if SUPPRESS_MARKER in block and SUPPRESS_RE.search(block) is None:
+            errors.append(f"{path.name}: non-canonical suppress in {fid!r}; run build or fix by hand")
+    unexpected = (boosted | logged | suppressed_present) - set(expected) - set(suppressed)
+    return set(expected) - boosted, unexpected, errors
 
 
-def apply_splice_file(path: Path, expected: dict[str, frozenset | None]) -> tuple[int, int, list[str]]:
-    """Converge one .include file to the expected boost + sc_focus plan.
+def apply_splice_file(path: Path, expected: dict[str, frozenset | None], suppressed: set[str]) -> tuple[int, int, list[str]]:
+    """Converge one .include file to the expected boost + sc_focus + suppress plan.
 
-    Returns (added, removed, errors). For a focus in the plan the required
-    boost inserts go after the sandbox-modifier anchor and one sc_focus block
-    is appended at the end of the body; canonical inserts the focus should no
-    longer carry come out. Every focus outside the plan is stripped of both
-    owned splices: the migration escape is gone (issue 30). Anything the
-    canonical shapes do not own is an error, never silently rewritten.
+    Returns (added, removed, errors). For a boosted focus the required boost
+    inserts go after the sandbox-modifier anchor and one sc_focus block is
+    appended at the end of the body; a suppressed focus gets the factor-0
+    modifier after the same anchor; canonical inserts a focus should no longer
+    carry come out. A focus outside both sets is stripped of all three splices
+    (issue 30: no migration mode). Anything the canonical shapes do not own is
+    an error, never silently rewritten.
     """
     text = path.read_text(encoding="utf-8")
     added, removed = 0, 0
     errors: list[str] = []
-    spans = {fid: (start, end) for fid, start, end in split_include_blocks(text)}
-    for fid in sorted(expected):
-        if fid not in spans:
+
+    def spans() -> dict[str, tuple[int, int]]:
+        return {fid: (s, e) for fid, s, e in split_include_blocks(text)}
+
+    for fid in sorted(set(expected) | suppressed):
+        if fid not in spans():
             errors.append(f"{path.name}: expected focus {fid!r} not found")
             continue
-        start, end = spans[fid]
+        start, end = spans()[fid]
         block = text[start:end]
-        for ins in required_inserts(expected[fid]):
-            if ins in block:
-                continue
-            anchor = BOOST_ANCHOR + "\n"
-            pos = block.find(anchor)
-            if pos < 0:
-                errors.append(f"{path.name}: no splice anchor in {fid!r}")
-                continue
-            at = start + pos + len(anchor)
-            text = text[:at] + ins + text[at:]
-            added += 1
-            spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
-            block = text[start:spans[fid][1]]
-        # Append the sc_focus block at the end of the focus body.
-        if log_insert(fid) not in block:
-            start, end = spans[fid]
-            block = text[start:end]
-            if FOCUS_LOG_MARKER in block and FOCUS_LOG_RE.search(block) is None:
-                errors.append(f"{path.name}: non-canonical sc_focus in {fid!r}; remove by hand")
-                continue
-            body = block.rstrip("\n")
-            trailing = block[len(body):] or "\n"
-            text = text[:start] + body + "\n" + log_insert(fid) + trailing + text[end:]
-            added += 1
-            spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
-            block = text[start:spans[fid][1]]
-        # Strip canonical inserts this focus should no longer carry.
-        want = set(required_inserts(expected[fid]))
-        found = set(CANONICAL_RE.findall(block))
-        for stale in sorted(found - want):
-            text = text[:start] + block.replace(stale, "", 1) + text[spans[fid][1]:]
-            removed += 1
-            spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
-            block = text[start:spans[fid][1]]
+        if fid in expected:
+            for ins in required_inserts(expected[fid]):
+                if ins in block:
+                    continue
+                pos = block.find(BOOST_ANCHOR + "\n")
+                if pos < 0:
+                    errors.append(f"{path.name}: no splice anchor in {fid!r}")
+                    continue
+                at = start + pos + len(BOOST_ANCHOR) + 1
+                text = text[:at] + ins + text[at:]
+                added += 1
+                start, end = spans()[fid]
+                block = text[start:end]
+            if log_insert(fid) not in block:
+                if FOCUS_LOG_MARKER in block and FOCUS_LOG_RE.search(block) is None:
+                    errors.append(f"{path.name}: non-canonical sc_focus in {fid!r}; remove by hand")
+                else:
+                    body = block.rstrip("\n")
+                    trailing = block[len(body):] or "\n"
+                    text = text[:start] + body + "\n" + log_insert(fid) + trailing + text[end:]
+                    added += 1
+                    start, end = spans()[fid]
+                    block = text[start:end]
+            want = set(required_inserts(expected[fid]))
+            found = set(CANONICAL_RE.findall(block))
+            for stale in sorted(found - want):
+                text = text[:start] + block.replace(stale, "", 1) + text[spans()[fid][1]:]
+                removed += 1
+                start, end = spans()[fid]
+                block = text[start:end]
+        if fid in suppressed:
+            if suppress_insert() not in block:
+                pos = block.find(BOOST_ANCHOR + "\n")
+                if pos < 0:
+                    errors.append(f"{path.name}: no splice anchor in {fid!r}")
+                else:
+                    at = start + pos + len(BOOST_ANCHOR) + 1
+                    text = text[:at] + suppress_insert() + text[at:]
+                    added += 1
+                    start, end = spans()[fid]
+                    block = text[start:end]
+        elif SUPPRESS_MARKER in block:
+            new_block, n = SUPPRESS_RE.subn("", block)
+            if n == 0 or SUPPRESS_MARKER in new_block:
+                errors.append(f"{path.name}: non-canonical suppress in {fid!r}; remove by hand")
+            else:
+                text = text[:start] + new_block + text[end:]
+                removed += 1
     for _fid in [fid for fid, _s, _e in split_include_blocks(text)]:
-        spans = {f: (s, e) for f, s, e in split_include_blocks(text)}
-        if _fid not in spans:
-            continue
-        start, end = spans[_fid]
+        start, end = spans()[_fid]
         block = text[start:end]
-        if _fid not in expected and (BOOST_MARKER in block or FOCUS_LOG_MARKER in block):
+        if _fid not in expected and _fid not in suppressed and (
+                BOOST_MARKER in block or FOCUS_LOG_MARKER in block or SUPPRESS_MARKER in block):
             new_block, n1 = CANONICAL_RE.subn("", block)
             new_block, n2 = FOCUS_LOG_RE.subn("", new_block)
-            if (n1 == 0 and n2 == 0) or BOOST_MARKER in new_block or FOCUS_LOG_MARKER in new_block:
-                errors.append(f"{path.name}: non-canonical boost/log in {_fid!r}; remove by hand")
+            new_block, n3 = SUPPRESS_RE.subn("", new_block)
+            if ((n1 == 0 and n2 == 0 and n3 == 0)
+                    or BOOST_MARKER in new_block or FOCUS_LOG_MARKER in new_block or SUPPRESS_MARKER in new_block):
+                errors.append(f"{path.name}: non-canonical boost/log/suppress in {_fid!r}; remove by hand")
                 continue
             text = text[:start] + new_block + text[end:]
             removed += 1
@@ -1008,6 +1060,17 @@ def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[
     return out, errors
 
 
+def expected_suppress(specs: list[tuple[str, dict]]) -> dict[str, set[str]]:
+    """Aggressor -> focus ids whose AI pick is closed for the arc (issue 33)."""
+    out: dict[str, set[str]] = {}
+    for _, data in specs:
+        sup = data.get("suppress", [])
+        if not isinstance(sup, list):
+            continue
+        out.setdefault(data["aggressor"], set()).update(s for s in sup if isinstance(s, str))
+    return out
+
+
 SET_TARGETS_HEAD_RE = re.compile(r"^sandbox_set_targets\(\):$")
 FUNC_RE = re.compile(r"^([A-Za-z_0-9]+)\(\):$")
 ARC_GUARD_RE = re.compile(r"^\s*(?:if|elif) global\.sandbox_scenario == (\d+):\s*$")
@@ -1069,6 +1132,7 @@ def build_mod(mod_dir: Path, vanilla_root: Path | None) -> tuple[int, list[str]]
     (mod_dir / GEN_HSL_REL).write_text(gen_text, encoding="utf-8")
     expected, gerrs = expected_boosts(mod_dir, specs)
     errors.extend(gerrs)
+    suppressed = expected_suppress(specs)
     if errors:
         return count, errors
     cov_errs = coverage(mod_dir, specs)
@@ -1076,12 +1140,12 @@ def build_mod(mod_dir: Path, vanilla_root: Path | None) -> tuple[int, list[str]]
     if errors:
         return count, errors
     changed = 0
-    for agg in sorted(expected):
+    for agg in sorted(set(expected) | set(suppressed)):
         inc = include_path_for(mod_dir, agg)
         if not inc.is_file():
             errors.append(f"no include file for aggressor {agg} ({inc.name})")
             continue
-        added, removed, serrs = apply_splice_file(inc, expected[agg])
+        added, removed, serrs = apply_splice_file(inc, expected.get(agg, {}), suppressed.get(agg, set()))
         errors.extend(serrs)
         changed += added + removed
     return count, errors
@@ -1137,18 +1201,19 @@ def check_mod(mod_dir: Path, vanilla_root: Path | None) -> tuple[int, list[str]]
         errors.append(f"stale generated mechanics ({GEN_HSL_REL.as_posix()}); run build")
     expected, gerrs = expected_boosts(mod_dir, specs)
     errors.extend(gerrs)
+    suppressed = expected_suppress(specs)
     errors.extend(coverage(mod_dir, specs))
-    for agg in sorted(expected):
+    for agg in sorted(set(expected) | set(suppressed)):
         inc = include_path_for(mod_dir, agg)
         if not inc.is_file():
             errors.append(f"no include file for aggressor {agg} ({inc.name})")
             continue
-        missing, unexpected, serrs = check_splice_file(inc, expected[agg])
+        missing, unexpected, serrs = check_splice_file(inc, expected.get(agg, {}), suppressed.get(agg, set()))
         errors.extend(serrs)
         for fid in sorted(missing):
             errors.append(f"{inc.name}: missing boost on {fid!r}; run build")
         for fid in sorted(unexpected):
-            errors.append(f"{inc.name}: unexpected boost/log on {fid!r}; run build to converge")
+            errors.append(f"{inc.name}: unexpected boost/log/suppress on {fid!r}; run build to converge")
     errors.extend(check_labels(mod_dir, specs))
     return count, errors
 

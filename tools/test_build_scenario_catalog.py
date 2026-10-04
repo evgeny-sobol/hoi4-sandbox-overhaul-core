@@ -122,6 +122,68 @@ focuses = ["GER_remilitarize_the_rhineland", "GER_anschluss", "GER_demand_sudete
 """
 
 
+SUPPRESS_GRAPH = """\
+# GER_root
+
+```mermaid
+flowchart TD
+    n1["GER_remilitarize_the_rhineland"]
+    n2["GER_anschluss"]
+    n3["GER_demand_sudetenland"]
+    n4["GER_austria_first"]
+    n1 --> n2
+    n2 --> n3
+    n1 --> n4
+```
+"""
+
+SUPPRESS_INCLUDE = """\
+  focus[id = GER_remilitarize_the_rhineland]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_anschluss]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_demand_sudetenland]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_austria_first]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+"""
+
+SUPPRESS_SPEC = """\
+id = "axis_expansion"
+number = 1
+status = "ready"
+aggressor = "GER"
+key = "axis"
+
+targets = { a = ["CZE", "POL"], b = ["FRA", "ENG"] }
+
+notes = "Rationale."
+
+suppress = ["GER_austria_first"]
+
+[ladder]
+crises_at_month = 12
+peak_at_month = 24
+crises_func = "sandbox_fire_axis_crises"
+peak_func = "sandbox_fire_axis_peak"
+
+[joiners]
+select = "top_n_by_scorer"
+n = 2
+
+[[paths]]
+focuses = ["GER_remilitarize_the_rhineland", "GER_anschluss", "GER_demand_sudetenland"]
+"""
+
+
 def default_hsl(*scenarios: int) -> str:
     lines = ["sandbox_set_targets():"]
     for n in scenarios or (1,):
@@ -546,6 +608,51 @@ def test_focus_log_idempotent() -> None:
     assert run(mod).returncode == 0
     assert inc.read_bytes() == before
     assert run(mod, "--check").returncode == 0
+
+
+def test_suppress_added_and_pruned() -> None:
+    mod = make_mod({"axis_expansion.toml": SUPPRESS_SPEC}, graph=SUPPRESS_GRAPH, include=SUPPRESS_INCLUDE)
+    assert run(mod).returncode == 0
+    inc = mod / "common" / "national_focus" / "germany.include"
+    assert "$ai_scenario_focus_suppress()" in focus_block(inc.read_text(encoding="utf-8"), "GER_austria_first")
+    assert run(mod, "--check").returncode == 0
+    spec = mod / "docs" / "scenarios" / "axis_expansion.toml"
+    spec.write_text(SUPPRESS_SPEC.replace('suppress = ["GER_austria_first"]\n\n', ""), encoding="utf-8")
+    import os
+    os.utime(mod / "docs" / "gdd" / "National Focuses" / "germany.md", None)
+    assert run(mod).returncode == 0
+    assert "$ai_scenario_focus_suppress()" not in inc.read_text(encoding="utf-8")
+    assert run(mod, "--check").returncode == 0
+
+
+def test_suppress_missing_detected() -> None:
+    mod = make_mod({"axis_expansion.toml": SUPPRESS_SPEC}, graph=SUPPRESS_GRAPH, include=SUPPRESS_INCLUDE)
+    assert run(mod).returncode == 0
+    inc = mod / "common" / "national_focus" / "germany.include"
+    text = inc.read_text(encoding="utf-8").replace(
+        "      +modifier:\n        $ai_scenario_focus_suppress()\n", "", 1)
+    inc.write_text(text, encoding="utf-8")
+    r = run(mod, "--check")
+    assert r.returncode == 1, r.stdout
+    assert "suppress" in r.stdout
+    assert run(mod).returncode == 0
+    assert "$ai_scenario_focus_suppress()" in inc.read_text(encoding="utf-8")
+
+
+def test_suppress_in_path_fails() -> None:
+    bad = SUPPRESS_SPEC.replace('["GER_austria_first"]', '["GER_anschluss"]')
+    mod = make_mod({"axis_expansion.toml": bad}, graph=SUPPRESS_GRAPH, include=SUPPRESS_INCLUDE)
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "also in a path" in r.stdout
+
+
+def test_suppress_unknown_focus_fails() -> None:
+    bad = SUPPRESS_SPEC.replace('["GER_austria_first"]', '["GER_nowhere"]')
+    mod = make_mod({"axis_expansion.toml": bad}, graph=SUPPRESS_GRAPH, include=SUPPRESS_INCLUDE)
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "GER_nowhere" in r.stdout
 
 
 def test_check_mode_passes() -> None:
