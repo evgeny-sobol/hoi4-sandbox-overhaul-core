@@ -29,6 +29,7 @@ STATUSES = ("ready", "draft")
 TAG_RE = re.compile(r"^[A-Z]{3}$")
 FUNC_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 FOCUS_ID_RE = re.compile(r"\b[A-Z]{2,4}_[A-Za-z0-9_]+\b")
+JOIN_FILTERS = frozenset({"same_ideology", "same_continent"})
 
 # Aggressor tag -> focus-graph file stem in docs/gdd/National Focuses/.
 # Falls back to the lowercased tag when the mod names the file that way.
@@ -154,6 +155,14 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
         n = joiners.get("n", None)
         if not isinstance(n, int) or isinstance(n, bool) or n < 1:
             errors.append(f"{name}: joiners.n must be a positive integer")
+        invite = joiners.get("invite_event", None)
+        if not isinstance(invite, str) or not invite.strip():
+            errors.append(f"{name}: joiners.invite_event must be a non-empty event id")
+        require = joiners.get("require", [])
+        if not isinstance(require, list) or any(r not in JOIN_FILTERS for r in require):
+            errors.append(f"{name}: joiners.require must be a subset of {sorted(JOIN_FILTERS)}")
+        elif len(require) != len(set(require)):
+            errors.append(f"{name}: joiners.require has duplicate entries")
 
     gate = data.get("gate", None)
     if gate is not None:
@@ -690,7 +699,7 @@ def expected_labels(specs: list[tuple[str, dict]]) -> dict[str, set[str]]:
     out = {"sc_goal": set(), "sc_justify": set()}
     for _, data in specs:
         agg = data["aggressor"].lower()
-        for variant in ("a", "b"):
+        for variant in data["targets"]:
             for tgt in data["targets"][variant]:
                 t = tgt.lower()
                 out["sc_goal"].add(f"{agg}_on_{t}")
@@ -952,6 +961,36 @@ def render_pick(names: dict[str, str], number: int, aggressor: str, key: str) ->
     ]
 
 
+def render_joiners(data: dict) -> list[str]:
+    """Generated join-selection function for one arc (docs/adr/0005).
+
+    Sets the per-call join-filter globals from the spec's `require`, scores the
+    shared candidate pool, and fires the arc's invite event at the top-n
+    candidates with a positive score, then clears the flags. Named
+    `sandbox_select_<key>_joiners` so the hand-written peak function calls it
+    unchanged.
+    """
+    key = data["key"]
+    joiners = data["joiners"]
+    n = joiners["n"]
+    invite = joiners["invite_event"]
+    require = joiners.get("require", [])
+    out = [f"sandbox_select_{key}_joiners():"]
+    out.append(f"  global.&scenario_join_same_ideology = {1 if 'same_ideology' in require else 0}")
+    out.append(f"  global.&scenario_join_same_continent = {1 if 'same_continent' in require else 0}")
+    out.append("  sandbox_snapshot_join_industry()")
+    out.append("  get_sorted_scored_countries(scenario_join_scorer, scenario_join_candidates[], scenario_join_scores[])")
+    for i in range(n):
+        out.append(f"  if scenario_join_scores[{i}] > 0:")
+        out.append(f"    var:scenario_join_candidates[{i}]:")
+        out.append("      country_event:")
+        out.append(f"        id({invite})")
+        out.append("      $sandbox_log_sc(sc_offer, invited)")
+    out.append("  global.&scenario_join_same_ideology = 0")
+    out.append("  global.&scenario_join_same_continent = 0")
+    return out
+
+
 def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
     """Generated mechanics sibling: per-arc functions derived from specs.
 
@@ -1009,6 +1048,9 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
         if isinstance(key, str):
             out.extend(render_pick(names, number, agg, key))
             out.append("")
+            if isinstance(data.get("joiners"), dict) and data["joiners"].get("invite_event"):
+                out.extend(render_joiners(data))
+                out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 

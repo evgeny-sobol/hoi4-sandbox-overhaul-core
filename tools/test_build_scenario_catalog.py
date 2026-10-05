@@ -76,6 +76,7 @@ peak_at_month = 24
 [joiners]
 select = "top_n_by_scorer"
 n = 2
+invite_event = "sandbox_probe.4"
 
 [[paths]]
 focuses = ["GER_fork_a", "GER_fork_c"]
@@ -116,6 +117,7 @@ peak_func = "sandbox_fire_axis_peak"
 [joiners]
 select = "top_n_by_scorer"
 n = 2
+invite_event = "sandbox_probe.4"
 
 [[paths]]
 focuses = ["GER_remilitarize_the_rhineland", "GER_anschluss", "GER_demand_sudetenland"]
@@ -178,6 +180,7 @@ peak_func = "sandbox_fire_axis_peak"
 [joiners]
 select = "top_n_by_scorer"
 n = 2
+invite_event = "sandbox_probe.4"
 
 [[paths]]
 focuses = ["GER_remilitarize_the_rhineland", "GER_anschluss", "GER_demand_sudetenland"]
@@ -492,6 +495,24 @@ gen_axis_expansion_eligible():
 gen_axis_expansion_pick_log():
   if global.sandbox_scenario == 1:
     $sandbox_log_sc(sc_pick, axis)
+
+sandbox_select_axis_joiners():
+  global.&scenario_join_same_ideology = 0
+  global.&scenario_join_same_continent = 0
+  sandbox_snapshot_join_industry()
+  get_sorted_scored_countries(scenario_join_scorer, scenario_join_candidates[], scenario_join_scores[])
+  if scenario_join_scores[0] > 0:
+    var:scenario_join_candidates[0]:
+      country_event:
+        id(sandbox_probe.4)
+      $sandbox_log_sc(sc_offer, invited)
+  if scenario_join_scores[1] > 0:
+    var:scenario_join_candidates[1]:
+      country_event:
+        id(sandbox_probe.4)
+      $sandbox_log_sc(sc_offer, invited)
+  global.&scenario_join_same_ideology = 0
+  global.&scenario_join_same_continent = 0
 """
 
 
@@ -655,6 +676,48 @@ def test_suppress_unknown_focus_fails() -> None:
     assert "GER_nowhere" in r.stdout
 
 
+def test_joiners_require_sets_flags() -> None:
+    spec = GOOD_SPEC.replace(
+        'invite_event = "sandbox_probe.4"',
+        'invite_event = "sandbox_probe.4"\nrequire = ["same_ideology", "same_continent"]')
+    mod = make_mod({"axis_expansion.toml": spec})
+    assert run(mod).returncode == 0
+    gen = (mod / "common" / "scripted_effects" / "99_sandbox_scenarios_gen.hsl").read_text(encoding="utf-8")
+    assert "sandbox_select_axis_joiners():" in gen
+    assert "global.&scenario_join_same_ideology = 1" in gen
+    assert "global.&scenario_join_same_continent = 1" in gen
+    assert "id(sandbox_probe.4)" in gen
+
+
+def test_joiners_missing_invite_event_fails() -> None:
+    spec = GOOD_SPEC.replace('invite_event = "sandbox_probe.4"\n', "")
+    mod = make_mod({"axis_expansion.toml": spec})
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "invite_event" in r.stdout
+
+
+def test_joiners_bad_require_fails() -> None:
+    spec = GOOD_SPEC.replace(
+        'invite_event = "sandbox_probe.4"',
+        'invite_event = "sandbox_probe.4"\nrequire = ["nonsense"]')
+    mod = make_mod({"axis_expansion.toml": spec})
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "require" in r.stdout
+
+
+def test_single_variant_spec_builds() -> None:
+    spec = GOOD_SPEC.replace(
+        'targets = { a = ["CZE", "POL"], b = ["FRA", "ENG"] }',
+        'targets = { a = ["CZE", "POL"] }')
+    mod = make_mod({"axis_expansion.toml": spec})
+    assert run(mod).returncode == 0
+    assert run(mod, "--check").returncode == 0
+    gen = (mod / "common" / "scripted_effects" / "99_sandbox_scenarios_gen.hsl").read_text(encoding="utf-8")
+    assert "if global.sandbox_target_variant == 0:" in gen  # no dangling else on one variant
+
+
 def test_check_mode_passes() -> None:
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
     assert run(mod).returncode == 0
@@ -786,6 +849,7 @@ peak_at_month = 24
 [joiners]
 select = "top_n_by_scorer"
 n = 2
+invite_event = "sandbox_probe.4"
 
 [[paths]]
 variants = ["a"]
@@ -815,6 +879,7 @@ peak_func = "sandbox_fire_probe_peak"
 [joiners]
 select = "top_n_by_scorer"
 n = 2
+invite_event = "sandbox_probe.4"
 
 [[paths]]
 variants = ["a"]

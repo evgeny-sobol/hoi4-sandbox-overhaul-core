@@ -58,8 +58,6 @@ ELSE_RE = re.compile(r"^\s*else:\s*$")
 ADD_RE = re.compile(r"^\s*global\.&sandbox_targets\[\]\.add\((\w+)\)\s*$")
 TAG_HEAD_RE = re.compile(r"^\s*([A-Z]{3}):\s*$")
 
-VARIANTS = ("a", "b")
-
 
 def split_functions(lines: list[str]) -> dict[str, list[str]]:
     """Map each `name():` function to the lines of its body."""
@@ -138,7 +136,7 @@ def load_spec_arcs(mod: Path) -> dict[int, tuple[str, dict[str, list[str]]]]:
             continue
         out[number] = (
             data["aggressor"],
-            {v: list(data["targets"][v]) for v in ("a", "b")},
+            {v: list(data["targets"][v]) for v in data["targets"]},
         )
     return out
 
@@ -157,12 +155,10 @@ def check_consistency(arcs, aggressors) -> None:
             "targets in sandbox_set_targets()"
         )
     for arc in sorted(arcs):
-        for v in VARIANTS:
-            if not arcs[arc].get(v):
-                raise SystemExit(
-                    f"error: arc {arc} has no variant {v} targets in "
-                    "sandbox_set_targets()"
-                )
+        if not arcs[arc]:
+            raise SystemExit(
+                f"error: arc {arc} has no variants in sandbox_set_targets()"
+            )
 
 
 def build(arcs, aggressors) -> list[str]:
@@ -181,11 +177,13 @@ def build(arcs, aggressors) -> list[str]:
     for arc in sorted(arcs):
         agg = aggressors[arc]
         out.append(f"  if global.sandbox_scenario == {arc}:")
-        for v in VARIANTS:
+        variants = sorted(arcs[arc])
+        for i, v in enumerate(variants):
             tags = arcs[arc][v]
             out.append(
-                "    if global.sandbox_target_variant == a:"
-                if v == "a"
+                f"    if global.sandbox_target_variant == {i}:"
+                if i == 0
+                else f"    elif global.sandbox_target_variant == {i}:" if i < len(variants) - 1
                 else "    else:"
             )
             out.append(f"      if tag({agg} | {' | '.join(tags)}):")
@@ -238,7 +236,7 @@ def main() -> None:
     arcs = parse_targets(funcs["sandbox_set_targets"])
     aggressors = parse_aggressors(funcs["sandbox_seed_actors"])
     for number, (agg, tgts) in load_spec_arcs(mod).items():
-        arcs[number] = {v: list(tgts[v]) for v in ("a", "b")}
+        arcs[number] = {v: list(tgts[v]) for v in tgts}
         aggressors[number] = agg
     check_consistency(arcs, aggressors)
 
@@ -246,8 +244,8 @@ def main() -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("\n".join(build(arcs, aggressors)), encoding="utf-8")
     print(
-        f"wrote {dst} ({len(arcs)} arcs, "
-        f"variants a/b, aggressors {', '.join(aggressors[a] for a in sorted(aggressors))})"
+        f"wrote {dst} ({len(arcs)} arcs, aggressors "
+        f"{', '.join(aggressors[a] for a in sorted(aggressors))})"
     )
 
 
