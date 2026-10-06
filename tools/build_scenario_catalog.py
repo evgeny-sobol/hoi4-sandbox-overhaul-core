@@ -199,6 +199,7 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
 
     paths = req("paths", list)
     key_focuses: list[str] = []
+    key_after: list[str] = []
     path_entries: list[tuple[frozenset, list[str]]] = []
     if isinstance(paths, list):
         if not paths:
@@ -224,13 +225,22 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
                     errors.append(f"{name}: paths[{i}].variants {unknown} are not targets keys")
                     continue
                 entry_set = frozenset(entry_variants)
+            entry_after = path.get("after", None)
+            after_list: list[str] = []
+            if entry_after is not None:
+                if (not isinstance(entry_after, list) or not entry_after
+                        or any(not isinstance(f, str) for f in entry_after)):
+                    errors.append(f"{name}: paths[{i}].after must be a non-empty list of focus ids")
+                    continue
+                after_list = list(entry_after)
             if not entry_set:
                 errors.append(f"{name}: paths[{i}] covers no variant")
                 continue
             key_focuses.extend(focuses)
-            path_entries.append((entry_set, focuses))
+            key_after.extend(after_list)
+            path_entries.append((entry_set, focuses, tuple(after_list)))
     covered: set[str] = set()
-    for entry_set, _focuses in path_entries:
+    for entry_set, _focuses, _after in path_entries:
         covered |= set(entry_set)
     for variant in variants:
         if variant not in covered:
@@ -244,11 +254,11 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
     if not isinstance(suppress, list) or any(not isinstance(f, str) for f in suppress):
         errors.append(f"{name}: suppress must be a list of focus ids")
         suppress = []
-    clash = sorted(set(suppress) & set(key_focuses))
+    clash = sorted(set(suppress) & (set(key_focuses) | set(key_after)))
     if clash:
         errors.append(f"{name}: suppress focuses are also in a path: {clash}")
 
-    if isinstance(aggressor, str) and TAG_RE.match(aggressor) and (key_focuses or suppress):
+    if isinstance(aggressor, str) and TAG_RE.match(aggressor) and (key_focuses or suppress or key_after):
         stem = GRAPH_ALIASES.get(aggressor, aggressor.lower())
         graph_path = graphs_dir / f"{stem}.md"
         if not graph_path.is_file():
@@ -262,6 +272,9 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
             for fid in suppress:
                 if fid not in graph_ids:
                     errors.append(f"{name}: suppress focus {fid!r} not in {graph_path.name}")
+            for fid in key_after:
+                if fid not in graph_ids:
+                    errors.append(f"{name}: after focus {fid!r} not in {graph_path.name}")
 
     return errors
 
@@ -297,6 +310,9 @@ CATALOG_REL = Path("docs/gdd/Scenarios Catalog.md")
 BOOST_ANCHOR = "      $ai_sandbox_modifier()"
 BOOST_INSERT = "      +modifier:\n        $ai_scenario_focus_boost()\n"
 BOOST_MARKER = "$ai_scenario_focus_boost"
+# Completion-gated boost: one gate line per listed focus, the boost holds only
+# once all of them are completed (docs/gdd/Scenarios.md "Paths").
+GATE_MARKER = "$ai_scenario_focus_gate_after"
 
 # Per-focus completion telemetry (issue 31): one +completion_reward block,
 # appended at the end of the focus body, per focus in the boost plan. The
@@ -307,6 +323,14 @@ FOCUS_LOG_MARKER = "$sandbox_log_sc_focus"
 
 def gated_insert(variant: str) -> str:
     return f"      +modifier:\n        $ai_scenario_focus_boost_variant({variant})\n"
+
+
+def after_insert(after: tuple[str, ...]) -> str:
+    lines = ["      +modifier:"]
+    for fid in after:
+        lines.append(f"        {GATE_MARKER}({fid})")
+    lines += ["        factor(5)", "        is_live_scenario_aggressor()"]
+    return "\n".join(lines) + "\n"
 
 
 def log_insert(focus_id: str) -> str:
@@ -409,34 +433,63 @@ def vidx(data: dict, variant: str) -> int:
     return variant_keys(data).index(variant)
 
 
-def path_entries(data: dict) -> list[tuple[frozenset, list[str]]]:
-    """(variants, focuses) per path; a missing variants field means shared."""
+def path_entries(data: dict) -> list[tuple[frozenset, list[str], tuple[str, ...]]]:
+    """(variants, focuses, after) per path. A missing variants field means
+    shared; a missing after field means the boost is unconditional."""
     keys = variant_keys(data)
     out = []
     for path in data["paths"]:
         vs = path.get("variants", None)
-        out.append((frozenset(keys) if vs is None else frozenset(vs), list(path["focuses"])))
+        after = path.get("after", None)
+        out.append((
+            frozenset(keys) if vs is None else frozenset(vs),
+            list(path["focuses"]),
+            tuple(after) if isinstance(after, list) else (),
+        ))
     return out
 
 
-def boost_plan(data: dict, prereq: dict[str, set[str]], excl: set[tuple[str, str]]) -> dict[str, frozenset | None]:
-    """Focus -> None (shared, plain boost) or the variant set for gated boosts.
+def boost_plan(data: dict, prereq: dict[str, set[str]], excl: set[tuple[str, str]]) -> tuple[dict[str, tuple[frozenset | None, tuple[str, ...]]], list[str]]:
+    """Focus -> (variant gate or None, completion gate tuple), plus errors.
 
-    Closure runs per path; a focus used in every variant stays plain, a focus
-    used in a strict subset gets one gated modifier per variant in the set.
+    Closure runs per path. A focus used in every variant with no path gate
+    stays plain; a focus in a strict subset of variants takes the variant
+    gate; a focus whose paths all carry `after` takes the completion gate
+    (every listed focus completed). A focus in any ungated path stays plain.
+    Two distinct gates on one focus are ambiguous and reported.
     """
     keys = variant_keys(data)
     uses: dict[str, set[str]] = {}
-    for variants, focuses in path_entries(data):
+    ungated: set[str] = set()
+    gates: dict[str, set[tuple[str, ...]]] = {}
+    for variants, focuses, after in path_entries(data):
         keep = boost_set(focuses, prereq, excl)
         for fid in keep:
             uses.setdefault(fid, set()).update(variants)
-    return {fid: (None if set(vs) >= set(keys) else frozenset(vs)) for fid, vs in uses.items()}
+            if after:
+                gates.setdefault(fid, set()).add(after)
+            else:
+                ungated.add(fid)
+    errors: list[str] = []
+    out: dict[str, tuple[frozenset | None, tuple[str, ...]]] = {}
+    for fid, vs in uses.items():
+        variant = None if set(vs) >= set(keys) else frozenset(vs)
+        if fid in ungated or not gates.get(fid):
+            after: tuple[str, ...] = ()
+        elif len(gates[fid]) > 1:
+            errors.append(f"{data.get('id', '?')}: conflicting after gates on {fid!r}: {sorted(gates[fid])}")
+            after = ()
+        else:
+            after = next(iter(gates[fid]))
+        if variant is not None and after:
+            errors.append(f"{data.get('id', '?')}: {fid!r} is both variant-gated and after-gated (unsupported)")
+        out[fid] = (variant, after)
+    return out, errors
 
 
 def path_tail(data: dict, variant: str) -> str:
     """Last focus of the first path listing the variant (file order)."""
-    for variants, focuses in path_entries(data):
+    for variants, focuses, _after in path_entries(data):
         if variant in variants:
             return focuses[-1]
     raise KeyError(f"no path covers variant {variant!r}")
@@ -511,7 +564,7 @@ def render_catalog(specs: list[tuple[str, dict]], graphs: dict[str, tuple[dict, 
         out.append("| # | Aggressor | Arc | " + " | ".join(f"Variant {v}" for v in vkeys) + " | Key focuses | Status |")
         out.append("|" + "---|" * (5 + len(vkeys)))
         for name, data in arcs:
-            keys = [f for _, plist in path_entries(data) for f in plist]
+            keys = [f for _, plist, _after in path_entries(data) for f in plist]
             shorts = ", ".join(f"`{short_focus(f, agg)}`" for f in keys)
             cols = " | ".join(", ".join(data["targets"].get(v, ())) for v in vkeys)
             out.append(
@@ -521,7 +574,7 @@ def render_catalog(specs: list[tuple[str, dict]], graphs: dict[str, tuple[dict, 
         out.append("")
         prereq, excl = graphs[agg]
         for name, data in arcs:
-            keys = [f for _, plist in path_entries(data) for f in plist]
+            keys = [f for _, plist, _after in path_entries(data) for f in plist]
             out.append(f"### Arc {data.get('number', '-')}: {arc_title(data['id'])}")
             out.append("")
             out.append(data["notes"].strip())
@@ -543,20 +596,38 @@ def split_include_blocks(text: str) -> list[tuple[str, int, int]]:
     return spans
 
 
-def required_inserts(gate: frozenset | None) -> list[str]:
-    """Canonical splice lines for one focus: plain when shared, else one gated
-    modifier per variant in the set."""
-    if gate is None:
+def required_inserts(gate: tuple[frozenset | None, tuple[str, ...]]) -> list[str]:
+    """Canonical splice lines for one focus: plain when shared, one gated
+    modifier per variant in the set, or a completion-gated modifier."""
+    variant, after = gate
+    if after:
+        return [after_insert(after)]
+    if variant is None:
         return [BOOST_INSERT]
-    return [gated_insert(v) for v in sorted(gate)]
+    return [gated_insert(v) for v in sorted(variant)]
 
 
-CANONICAL_RE = re.compile(r"      \+modifier:\n        \$ai_scenario_focus_boost(?:_variant)?\([^)\n]*\)\n")
+CANONICAL_RE = re.compile(
+    r"      \+modifier:\n(?:"
+    r"        \$ai_scenario_focus_boost(?:_variant)?\([^)\n]*\)"
+    r"|"
+    r"(?:        \$ai_scenario_focus_gate_after\([^)\n]*\)\n)+        factor\(5\)\n        is_live_scenario_aggressor\(\)"
+    r")\n"
+)
 FOCUS_LOG_RE = re.compile(r"    \+completion_reward:\n      \$sandbox_log_sc_focus\([^)\n]*\)\n")
 SUPPRESS_RE = re.compile(r"      \+modifier:\n        \$ai_scenario_focus_suppress\(\)\n")
 
 
-def check_splice_file(path: Path, expected: dict[str, frozenset | None], suppressed: set[str]) -> tuple[set[str], set[str], list[str]]:
+def boost_shape_label(gate: tuple[frozenset | None, tuple[str, ...]]) -> str:
+    variant, after = gate
+    if after:
+        return f"after {sorted(after)}"
+    if variant is None:
+        return "plain"
+    return f"gated {sorted(variant)}"
+
+
+def check_splice_file(path: Path, expected: dict[str, tuple[frozenset | None, tuple[str, ...]]], suppressed: set[str]) -> tuple[set[str], set[str], list[str]]:
     """Return (missing, unexpected, errors) for one .include file.
 
     Three owned splices: the boost modifier, the sc_focus completion_reward
@@ -574,7 +645,7 @@ def check_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
     errors: list[str] = []
     for fid, start, end in split_include_blocks(text):
         block = text[start:end]
-        if BOOST_MARKER in block:
+        if BOOST_MARKER in block or GATE_MARKER in block:
             boosted.add(fid)
         if FOCUS_LOG_MARKER in block:
             logged.add(fid)
@@ -586,7 +657,7 @@ def check_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
         block = text[spans[fid][0]:spans[fid][1]]
         for ins in required_inserts(expected[fid]):
             if ins not in block:
-                want = "plain" if expected[fid] is None else f"gated {sorted(expected[fid])}"
+                want = boost_shape_label(expected[fid])
                 errors.append(f"{path.name}: {fid!r} lacks the {want} boost; run build")
         if log_insert(fid) not in block:
             errors.append(f"{path.name}: {fid!r} lacks the sc_focus log; run build")
@@ -599,13 +670,13 @@ def check_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
         block = text[spans[fid][0]:spans[fid][1]]
         if suppress_insert() not in block:
             errors.append(f"{path.name}: {fid!r} lacks the suppress modifier; run build")
-        if BOOST_MARKER in block or FOCUS_LOG_MARKER in block:
+        if BOOST_MARKER in block or GATE_MARKER in block or FOCUS_LOG_MARKER in block:
             errors.append(f"{path.name}: suppressed focus {fid!r} is still boosted; run build")
     for fid in sorted(boosted | logged | suppressed_present):
         if fid not in expected and fid not in suppressed:
             continue
         block = text[spans[fid][0]:spans[fid][1]]
-        if BOOST_MARKER in block and CANONICAL_RE.search(block) is None:
+        if (BOOST_MARKER in block or GATE_MARKER in block) and CANONICAL_RE.search(block) is None:
             errors.append(f"{path.name}: non-canonical boost in {fid!r}; run build or fix by hand")
         if FOCUS_LOG_MARKER in block and FOCUS_LOG_RE.search(block) is None:
             errors.append(f"{path.name}: non-canonical sc_focus in {fid!r}; run build or fix by hand")
@@ -615,7 +686,7 @@ def check_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
     return set(expected) - boosted, unexpected, errors
 
 
-def apply_splice_file(path: Path, expected: dict[str, frozenset | None], suppressed: set[str]) -> tuple[int, int, list[str]]:
+def apply_splice_file(path: Path, expected: dict[str, tuple[frozenset | None, tuple[str, ...]]], suppressed: set[str]) -> tuple[int, int, list[str]]:
     """Converge one .include file to the expected boost + sc_focus + suppress plan.
 
     Returns (added, removed, errors). For a boosted focus the required boost
@@ -676,7 +747,7 @@ def apply_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
             new_block, n1 = CANONICAL_RE.subn("", block)
             new_block, n2 = FOCUS_LOG_RE.subn("", new_block)
             if n1 or n2:
-                if BOOST_MARKER in new_block or FOCUS_LOG_MARKER in new_block:
+                if BOOST_MARKER in new_block or GATE_MARKER in new_block or FOCUS_LOG_MARKER in new_block:
                     errors.append(f"{path.name}: non-canonical boost/log in {fid!r}; remove by hand")
                 else:
                     text = text[:start] + new_block + text[end:]
@@ -705,12 +776,12 @@ def apply_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
         start, end = spans()[_fid]
         block = text[start:end]
         if _fid not in expected and _fid not in suppressed and (
-                BOOST_MARKER in block or FOCUS_LOG_MARKER in block or SUPPRESS_MARKER in block):
+                BOOST_MARKER in block or GATE_MARKER in block or FOCUS_LOG_MARKER in block or SUPPRESS_MARKER in block):
             new_block, n1 = CANONICAL_RE.subn("", block)
             new_block, n2 = FOCUS_LOG_RE.subn("", new_block)
             new_block, n3 = SUPPRESS_RE.subn("", new_block)
             if ((n1 == 0 and n2 == 0 and n3 == 0)
-                    or BOOST_MARKER in new_block or FOCUS_LOG_MARKER in new_block or SUPPRESS_MARKER in new_block):
+                    or BOOST_MARKER in new_block or GATE_MARKER in new_block or FOCUS_LOG_MARKER in new_block or SUPPRESS_MARKER in new_block):
                 errors.append(f"{path.name}: non-canonical boost/log/suppress in {_fid!r}; remove by hand")
                 continue
             text = text[:start] + new_block + text[end:]
@@ -1134,8 +1205,8 @@ def stale_graph_errors(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str
     return errors
 
 
-def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[str, dict[str, frozenset | None]], list[str]]:
-    """Aggressor -> boost plan (focus -> None shared, or the gated variant set)."""
+def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[str, dict[str, tuple[frozenset | None, tuple[str, ...]]]], list[str]]:
+    """Aggressor -> boost plan (focus -> (variant gate, after gate))."""
     errors: list[str] = []
     graphs: dict[str, tuple[dict, set]] = {}
     for _, data in specs:
@@ -1146,20 +1217,30 @@ def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[
                 errors.append(f"no focus graph for aggressor {agg}")
                 continue
             graphs[agg] = load_graph(graph)
-    out: dict[str, dict[str, frozenset | None]] = {}
+    out: dict[str, dict[str, tuple[frozenset | None, tuple[str, ...]]]] = {}
     for _, data in specs:
         agg = data["aggressor"]
         if agg not in graphs:
             continue
         prereq, excl = graphs[agg]
-        plan = boost_plan(data, prereq, excl)
+        plan, plan_errors = boost_plan(data, prereq, excl)
+        errors.extend(plan_errors)
         merged = out.setdefault(agg, {})
         for fid, gate in plan.items():
-            if fid in merged:
-                prev = merged[fid]
-                merged[fid] = None if prev is None or gate is None else prev | gate
-            else:
+            if fid not in merged:
                 merged[fid] = gate
+                continue
+            pv, pa = merged[fid]
+            gv, ga = gate
+            variant = None if pv is None or gv is None else pv | gv
+            if not pa or not ga:
+                after: tuple[str, ...] = ()
+            elif pa == ga:
+                after = pa
+            else:
+                errors.append(f"{agg}: conflicting after gates on {fid!r}: {sorted(pa)} vs {sorted(ga)}")
+                after = ()
+            merged[fid] = (variant, after)
     # A suppressed focus is never boosted: suppressing an OR alternative is
     # legal because the path reaches its goal through the other branch. The
     # closure is author-trusted; suppressing a path's key focus is still

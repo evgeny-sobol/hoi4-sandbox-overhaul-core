@@ -775,6 +775,95 @@ def test_hold_gate_partial_fields_fail() -> None:
     assert "hold fields come as a set" in r.stdout
 
 
+AFTER_GRAPH = """\
+# GER_root
+
+```mermaid
+flowchart TD
+    n1["GER_remilitarize_the_rhineland"]
+    n2["GER_anschluss"]
+    n3["GER_demand_sudetenland"]
+    n4["GER_austria_first"]
+    n1 --> n2
+    n2 --> n3
+    n2 --> n4
+```
+"""
+
+AFTER_INCLUDE = """\
+  focus[id = GER_remilitarize_the_rhineland]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_anschluss]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_demand_sudetenland]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+  focus[id = GER_austria_first]:
+    ai_will_do:
+      +modifier:
+        $ai_sandbox_modifier()
+"""
+
+AFTER_SPEC = """\
+id = "axis_expansion"
+number = 1
+status = "ready"
+aggressor = "GER"
+key = "axis"
+
+targets = { a = ["CZE", "POL"], b = ["FRA", "ENG"] }
+
+notes = "Rationale."
+
+[ladder]
+crises_at_month = 12
+peak_at_month = 24
+crises_func = "sandbox_fire_axis_crises"
+peak_func = "sandbox_fire_axis_peak"
+
+[joiners]
+select = "top_n_by_scorer"
+n = 2
+invite_event = "sandbox_probe.4"
+
+[[paths]]
+focuses = ["GER_anschluss"]
+
+[[paths]]
+after = ["GER_anschluss"]
+focuses = ["GER_demand_sudetenland", "GER_austria_first"]
+"""
+
+
+def test_after_gate_generates_gated_boost() -> None:
+    mod = make_mod({"axis_expansion.toml": AFTER_SPEC}, graph=AFTER_GRAPH, include=AFTER_INCLUDE)
+    assert run(mod).returncode == 0
+    text = (mod / "common" / "national_focus" / "germany.include").read_text(encoding="utf-8")
+    gate = (
+        "      +modifier:\n"
+        "        $ai_scenario_focus_gate_after(GER_anschluss)\n"
+        "        factor(5)\n"
+        "        is_live_scenario_aggressor()\n"
+    )
+    assert gate in text
+    assert "      +modifier:\n        $ai_scenario_focus_boost()\n" in text
+    assert run(mod, "--check").returncode == 0
+    assert run(mod).returncode == 0  # idempotent
+
+
+def test_after_unknown_focus_fails() -> None:
+    spec = AFTER_SPEC.replace('after = ["GER_anschluss"]', 'after = ["GER_nope"]')
+    mod = make_mod({"axis_expansion.toml": spec}, graph=AFTER_GRAPH)
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "after focus" in r.stdout
+
+
 def test_check_mode_passes() -> None:
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
     assert run(mod).returncode == 0
