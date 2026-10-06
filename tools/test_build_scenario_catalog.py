@@ -864,6 +864,15 @@ def test_after_unknown_focus_fails() -> None:
     assert "after focus" in r.stdout
 
 
+def test_numberless_spec_emits_no_splices() -> None:
+    spec = GOOD_SPEC.replace('status = "ready"', 'status = "draft"').replace("number = 1\n", "")
+    mod = make_mod({"axis_expansion.toml": spec})
+    assert run(mod).returncode == 0
+    inc = (mod / "common" / "national_focus" / "germany.include").read_text(encoding="utf-8")
+    assert "$ai_scenario_focus_boost" not in inc
+    assert run(mod, "--check").returncode == 0
+
+
 def test_check_mode_passes() -> None:
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
     assert run(mod).returncode == 0

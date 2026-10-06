@@ -809,6 +809,8 @@ def expected_labels(specs: list[tuple[str, dict]]) -> dict[str, set[str]]:
     """
     out = {"sc_goal": set(), "sc_justify": set()}
     for _, data in specs:
+        if not is_wired(data):
+            continue
         agg = data["aggressor"].lower()
         for variant in data["targets"]:
             for tgt in data["targets"][variant]:
@@ -1205,11 +1207,21 @@ def stale_graph_errors(mod_dir: Path, specs: list[tuple[str, dict]]) -> list[str
     return errors
 
 
+def is_wired(data: dict) -> bool:
+    """True when the spec's number is set (it matches a code dispatcher arc).
+    A spec with no number is authoring-only: it prints in the catalog but no
+    boosts, suppress or joiners reach the mod."""
+    n = data.get("number")
+    return isinstance(n, int) and not isinstance(n, bool)
+
+
 def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[str, dict[str, tuple[frozenset | None, tuple[str, ...]]]], list[str]]:
     """Aggressor -> boost plan (focus -> (variant gate, after gate))."""
     errors: list[str] = []
     graphs: dict[str, tuple[dict, set]] = {}
     for _, data in specs:
+        if not is_wired(data):
+            continue
         agg = data["aggressor"]
         if agg not in graphs:
             graph = graph_path_for(mod_dir, agg)
@@ -1219,6 +1231,8 @@ def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[
             graphs[agg] = load_graph(graph)
     out: dict[str, dict[str, tuple[frozenset | None, tuple[str, ...]]]] = {}
     for _, data in specs:
+        if not is_wired(data):
+            continue
         agg = data["aggressor"]
         if agg not in graphs:
             continue
@@ -1258,6 +1272,8 @@ def expected_suppress(specs: list[tuple[str, dict]]) -> dict[str, set[str]]:
     """Aggressor -> focus ids whose AI pick is closed for the arc (issue 33)."""
     out: dict[str, set[str]] = {}
     for _, data in specs:
+        if not is_wired(data):
+            continue
         sup = data.get("suppress", [])
         if not isinstance(sup, list):
             continue
