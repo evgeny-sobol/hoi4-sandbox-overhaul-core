@@ -735,6 +735,23 @@ def test_spec_file_wrong_tag_prefix_fails() -> None:
     assert "does not match the file name" in r.stdout
 
 
+def test_suppress_overrides_boost_closure() -> None:
+    # Suppressing an OR alternative that sits in the boost closure is legal:
+    # suppress wins, the focus is not boosted (only suppressed), and the path
+    # still reaches its goal through the other branch.
+    spec = FORK_SPEC.replace('notes = "Fork probe."',
+                             'notes = "Fork probe."\nsuppress = ["GER_fork_b"]')
+    mod = make_mod({"fork_probe.toml": spec}, graph=FORK_GRAPH, include=FORK_INCLUDE,
+                   hsl=default_hsl(9))
+    assert run(mod).returncode == 0
+    inc = (mod / "common" / "national_focus" / "germany.include").read_text(encoding="utf-8")
+    b = focus_block(inc, "GER_fork_b")
+    assert "$ai_scenario_focus_suppress()" in b
+    assert "$ai_scenario_focus_boost" not in b
+    assert "$ai_scenario_focus_boost()" in focus_block(inc, "GER_fork_a")
+    assert run(mod, "--check").returncode == 0
+
+
 def test_check_mode_passes() -> None:
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
     assert run(mod).returncode == 0

@@ -577,8 +577,11 @@ def check_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
         if fid not in spans:
             errors.append(f"{path.name}: suppressed focus {fid!r} not found")
             continue
-        if suppress_insert() not in text[spans[fid][0]:spans[fid][1]]:
+        block = text[spans[fid][0]:spans[fid][1]]
+        if suppress_insert() not in block:
             errors.append(f"{path.name}: {fid!r} lacks the suppress modifier; run build")
+        if BOOST_MARKER in block or FOCUS_LOG_MARKER in block:
+            errors.append(f"{path.name}: suppressed focus {fid!r} is still boosted; run build")
     for fid in sorted(boosted | logged | suppressed_present):
         if fid not in expected and fid not in suppressed:
             continue
@@ -647,6 +650,20 @@ def apply_splice_file(path: Path, expected: dict[str, frozenset | None], suppres
                 removed += 1
                 start, end = spans()[fid]
                 block = text[start:end]
+        else:
+            # Suppressed (or dropped): strip any canonical boost/log still on it.
+            # Suppress wins over boost: a suppressed OR alternative is not
+            # boosted (expected_boosts already dropped it).
+            new_block, n1 = CANONICAL_RE.subn("", block)
+            new_block, n2 = FOCUS_LOG_RE.subn("", new_block)
+            if n1 or n2:
+                if BOOST_MARKER in new_block or FOCUS_LOG_MARKER in new_block:
+                    errors.append(f"{path.name}: non-canonical boost/log in {fid!r}; remove by hand")
+                else:
+                    text = text[:start] + new_block + text[end:]
+                    removed += n1 + n2
+                    start, end = spans()[fid]
+                    block = text[start:end]
         if fid in suppressed:
             if suppress_insert() not in block:
                 pos = block.find(BOOST_ANCHOR + "\n")
@@ -1103,6 +1120,16 @@ def expected_boosts(mod_dir: Path, specs: list[tuple[str, dict]]) -> tuple[dict[
                 merged[fid] = None if prev is None or gate is None else prev | gate
             else:
                 merged[fid] = gate
+    # A suppressed focus is never boosted: suppressing an OR alternative is
+    # legal because the path reaches its goal through the other branch. The
+    # closure is author-trusted; suppressing a path's key focus is still
+    # rejected by validate_spec.
+    for agg, sup in expected_suppress(specs).items():
+        merged = out.get(agg)
+        if not merged:
+            continue
+        for fid in sup:
+            merged.pop(fid, None)
     return out, errors
 
 
