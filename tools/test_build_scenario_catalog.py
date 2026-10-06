@@ -752,6 +752,29 @@ def test_suppress_overrides_boost_closure() -> None:
     assert run(mod, "--check").returncode == 0
 
 
+def test_hold_gate_generates_hold_block() -> None:
+    spec = GOOD_SPEC.replace(
+        'notes = "Rationale."',
+        'notes = "Rationale."\n\n[gate]\nhold_ideology = "neutrality"\nhold_max_months = 30\nhold_reason = "no_regime_change"')
+    mod = make_mod({"axis_expansion.toml": spec})
+    assert run(mod).returncode == 0
+    gen = (mod / "common" / "scripted_effects" / "99_sandbox_scenarios_gen.hsl").read_text(encoding="utf-8")
+    assert "GER->has_government(neutrality)" in gen
+    assert "global.&sandbox_scenario_hold_months += 1" in gen
+    assert "$sandbox_log_sc(sc_derail, no_regime_change)" in gen
+    assert run(mod, "--check").returncode == 0
+
+
+def test_hold_gate_partial_fields_fail() -> None:
+    spec = GOOD_SPEC.replace(
+        'notes = "Rationale."',
+        'notes = "Rationale."\n\n[gate]\nhold_ideology = "neutrality"')
+    mod = make_mod({"axis_expansion.toml": spec})
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "hold fields come as a set" in r.stdout
+
+
 def test_check_mode_passes() -> None:
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
     assert run(mod).returncode == 0

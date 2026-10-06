@@ -173,10 +173,29 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
         if not isinstance(gate, dict):
             errors.append(f"{name}: gate must be a table")
         else:
-            if not isinstance(gate.get("ideology"), str):
-                errors.append(f"{name}: gate.ideology must be a string")
-            if not isinstance(gate.get("at_phase"), str):
-                errors.append(f"{name}: gate.at_phase must be a string")
+            if "ideology" in gate or "at_phase" in gate:
+                if not isinstance(gate.get("ideology"), str):
+                    errors.append(f"{name}: gate.ideology must be a string")
+                if not isinstance(gate.get("at_phase"), str):
+                    errors.append(f"{name}: gate.at_phase must be a string")
+            hold_keys = ("hold_ideology", "hold_max_months", "hold_reason")
+            hold_present = [k for k in hold_keys if k in gate]
+            if hold_present and len(hold_present) != len(hold_keys):
+                errors.append(f"{name}: gate hold fields come as a set {hold_keys}")
+            if "hold_ideology" in gate:
+                if not isinstance(gate.get("hold_ideology"), str):
+                    errors.append(f"{name}: gate.hold_ideology must be a string")
+                cap = gate.get("hold_max_months")
+                if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+                    errors.append(f"{name}: gate.hold_max_months must be a positive integer")
+                reason = gate.get("hold_reason")
+                if not isinstance(reason, str) or not reason.strip():
+                    errors.append(f"{name}: gate.hold_reason must be a non-empty string")
+                lfuncs = data.get("ladder") or {}
+                if not (isinstance(lfuncs.get("crises_func"), str) and isinstance(lfuncs.get("peak_func"), str)):
+                    errors.append(f"{name}: gate hold requires ladder crises_func and peak_func")
+            if not hold_present and "ideology" not in gate and "at_phase" not in gate:
+                errors.append(f"{name}: gate declares neither the derail pair nor the hold set")
 
     paths = req("paths", list)
     key_focuses: list[str] = []
@@ -936,14 +955,18 @@ def render_telemetry(number: int, aggressor: str, targets: dict[str, list[str]])
     return out
 
 
-def render_derail(number: int, aggressor: str, targets: dict[str, list[str]]) -> list[str]:
+def render_derail(number: int, aggressor: str, targets: dict[str, list[str]], gate: dict | None = None) -> list[str]:
     """Gone and capitulated derail arms for one arc, then the per-variant
-    target arms. Mirrors the hand-written shape it replaces; flip gates
-    arrive with the first gated arc."""
+    target arms. A hold gate (gate.hold_ideology) prepends the regime-hold
+    block: while the aggressor is not yet on the required ideology the arc
+    clock stays at zero and a held-month counter runs; past
+    gate.hold_max_months the arc parks with gate.hold_reason. The block lives
+    here, not in the tick, so the park fires inside the derail pass and a
+    repick still triggers."""
     agg = aggressor
     gone = f"{agg.lower()}_gone"
     capitulated = f"{agg.lower()}_capitulated"
-    out = [
+    chain = [
         f"  if not country_exists({agg}):",
         "    global.&sandbox_scenario_phase = 3",
         f"    $sandbox_log_sc(sc_derail, {gone})",
@@ -956,10 +979,27 @@ def render_derail(number: int, aggressor: str, targets: dict[str, list[str]]) ->
     ]
     dkeys = sorted(targets)
     for i, variant in enumerate(dkeys):
-        out.append(f"    if global.sandbox_target_variant == {i}:" if i == 0
-                   else f"    elif global.sandbox_target_variant == {i}:" if i < len(dkeys) - 1
-                   else "    else:")
-        out.append(f"      $sandbox_check_targets_derail{len(targets[variant])}({agg}, {', '.join(targets[variant])})")
+        chain.append(f"    if global.sandbox_target_variant == {i}:" if i == 0
+                     else f"    elif global.sandbox_target_variant == {i}:" if i < len(dkeys) - 1
+                     else "    else:")
+        chain.append(f"      $sandbox_check_targets_derail{len(targets[variant])}({agg}, {', '.join(targets[variant])})")
+    hold = gate.get("hold_ideology") if isinstance(gate, dict) else None
+    if not hold:
+        return chain
+    cap, reason = gate["hold_max_months"], gate["hold_reason"]
+    out = [
+        f"  if country_exists({agg}) and not {agg}->has_government({hold}):",
+        "    global.&sandbox_scenario_hold_months += 1",
+        "    global.&sandbox_scenario_arc_months = 0",
+        f"    if global.sandbox_scenario_hold_months >= {cap}:",
+        "      global.&sandbox_scenario_phase = 3",
+        f"      $sandbox_log_sc(sc_derail, {reason})",
+        f"      $sandbox_log_sc(sc_end, {reason})",
+        "  else:",
+        "    global.&sandbox_scenario_hold_months = 0",
+        "  if global.sandbox_scenario_phase < 3:",
+    ]
+    out += ["  " + line for line in chain]
     return out
 
 
@@ -1063,7 +1103,7 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
         out.extend(render_telemetry(number, agg, data["targets"]))
         out.append("")
         out.append(f"{names['derail']}():")
-        out.extend(render_derail(number, agg, data["targets"]))
+        out.extend(render_derail(number, agg, data["targets"], data.get("gate")))
         out.append("")
         key = data.get("key", None)
         if isinstance(key, str):
