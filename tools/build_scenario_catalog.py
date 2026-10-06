@@ -796,6 +796,13 @@ def include_path_for(mod_dir: Path, aggressor: str) -> Path:
     return mod_dir / "common" / "national_focus" / f"{stem}.include"
 
 
+def spec_aggressors(specs: list[tuple[str, dict]]) -> set[str]:
+    """Every spec aggressor, wired or not: an unwired spec's include is still
+    converged so its stale splices come out."""
+    return {d["aggressor"] for _, d in specs
+            if isinstance(d.get("aggressor"), str) and TAG_RE.match(d["aggressor"])}
+
+
 SCENARIO_HSL_REL = Path("common/scripted_effects/99_sandbox_scenarios.hsl")
 GEN_HSL_REL = Path("common/scripted_effects/99_sandbox_scenarios_gen.hsl")
 LABEL_RE = re.compile(r"\$sandbox_log_sc\((sc_goal|sc_justify),\s*([A-Za-z_0-9]+)\)")
@@ -1350,7 +1357,7 @@ def build_mod(mod_dir: Path, vanilla_root: Path | None) -> tuple[int, list[str]]
     if errors:
         return count, errors
     changed = 0
-    for agg in sorted(set(expected) | set(suppressed)):
+    for agg in sorted(set(expected) | set(suppressed) | spec_aggressors(specs)):
         inc = include_path_for(mod_dir, agg)
         if not inc.is_file():
             errors.append(f"no include file for aggressor {agg} ({inc.name})")
@@ -1413,7 +1420,7 @@ def check_mod(mod_dir: Path, vanilla_root: Path | None) -> tuple[int, list[str]]
     errors.extend(gerrs)
     suppressed = expected_suppress(specs)
     errors.extend(coverage(mod_dir, specs))
-    for agg in sorted(set(expected) | set(suppressed)):
+    for agg in sorted(set(expected) | set(suppressed) | spec_aggressors(specs)):
         inc = include_path_for(mod_dir, agg)
         if not inc.is_file():
             errors.append(f"no include file for aggressor {agg} ({inc.name})")
