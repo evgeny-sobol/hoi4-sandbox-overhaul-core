@@ -718,6 +718,23 @@ def test_single_variant_spec_builds() -> None:
     assert "if global.sandbox_target_variant == 0:" in gen  # no dangling else on one variant
 
 
+def test_spec_file_may_be_tag_prefixed() -> None:
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
+    spec = mod / "docs" / "scenarios" / "axis_expansion.toml"
+    spec.rename(mod / "docs" / "scenarios" / "GER_axis_expansion.toml")
+    assert run(mod).returncode == 0
+    assert run(mod, "--check").returncode == 0
+
+
+def test_spec_file_wrong_tag_prefix_fails() -> None:
+    mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
+    spec = mod / "docs" / "scenarios" / "axis_expansion.toml"
+    spec.rename(mod / "docs" / "scenarios" / "ITA_axis_expansion.toml")
+    r = run(mod)
+    assert r.returncode == 1, r.stdout
+    assert "does not match the file name" in r.stdout
+
+
 def test_check_mode_passes() -> None:
     mod = make_mod({"axis_expansion.toml": GOOD_SPEC})
     assert run(mod).returncode == 0

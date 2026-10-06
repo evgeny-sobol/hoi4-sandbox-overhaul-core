@@ -97,8 +97,6 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
         return data[key]
 
     spec_id = req("id", str)
-    if isinstance(spec_id, str) and spec_id != name:
-        errors.append(f"{name}: id {spec_id!r} does not match the file name")
     status = req("status", str)
     if isinstance(status, str) and status not in STATUSES:
         errors.append(f"{name}: status {status!r} must be one of {STATUSES}")
@@ -106,6 +104,12 @@ def validate_spec(name: str, data: dict, graphs_dir: Path, known_tags: set[str] 
     if isinstance(aggressor, str):
         if not TAG_RE.match(aggressor):
             errors.append(f"{name}: aggressor {aggressor!r} is not a 3-letter uppercase tag")
+    if isinstance(spec_id, str) and isinstance(aggressor, str):
+        # The file may be named `<id>.toml` or grouped as `<aggressor>_<id>.toml`.
+        if spec_id != name and name != f"{aggressor}_{spec_id}":
+            errors.append(
+                f"{name}: id {spec_id!r} does not match the file name "
+                f"(expected {name!r} or {aggressor}_{spec_id!r})")
     number = data.get("number", None)
     if number is not None and (not isinstance(number, int) or isinstance(number, bool) or number < 1):
         errors.append(f"{name}: number must be a positive integer")
