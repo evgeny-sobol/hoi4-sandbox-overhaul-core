@@ -140,6 +140,10 @@ def main() -> None:
                 if rel.as_posix() in EXPECTED_ONLY_CORE:
                     continue
                 drifted.append(f"ONLY-CORE {rel.as_posix()}")
+                if not check:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst.write_bytes(src.read_bytes())
+                    synced += 1
                 continue
             if sha(src) != sha(dst):
                 drifted.append(f"DIFF {rel.as_posix()}")
