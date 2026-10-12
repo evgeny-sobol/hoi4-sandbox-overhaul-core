@@ -64,24 +64,32 @@ SHARED_MISC = [
     ".scratch/scripts/check_derail_arms.py",
     ".scratch/scripts/check_focus_splices.py",
     ".scratch/scripts/check_if_else.py",
+    ".scratch/scripts/check_cw_fuses.py",
+    ".scratch/scripts/check_cw_fuses_baseline",
     ".scratch/scripts/check_peak_coverage.py",
     ".scratch/scripts/check_pick_gate.py",
     ".scratch/scripts/extract_sandbox.py",
     "AGENTS.md",
+    "docs/agents/characters.md",
     "docs/agents/domain.md",
+    "docs/agents/external-dirs.md",
     "docs/agents/issue-tracker.md",
+    "docs/agents/language.md",
     "docs/agents/triage-labels.md",
     "prepare-release.ps1",
     ".gitattributes",
 ]
 
-# Per-mod catalogs: never overwritten by the sync.
+# Per-mod files: never overwritten by the sync. The scenario catalogs plus
+# the Rt56-diverged opinion/scorer files (vanilla scale vs Rt56 scale).
 EXCLUDE = {
     "common/scripted_effects/99_sandbox_scenarios.hsl",
     "common/scripted_triggers/99_sandbox_scenario_triggers.hsl",
     "common/game_rules/99_sandbox_scenario_rules.hsl",
     "common/on_actions/99_sandbox_on_actions.hsl",
     "common/scripted_effects/99_sandbox_arc_hooks.hsl",
+    "common/opinion_modifiers/99_sandbox_opinion_modifiers.hsl",
+    "common/scorers/country/99_sandbox_scorer.hsl",
 }
 
 # Per-mod authoring trees: never copied, overwritten, or deleted by the sync.
@@ -134,6 +142,10 @@ def main() -> None:
                 if rel.as_posix() in EXPECTED_ONLY_CORE:
                     continue
                 drifted.append(f"ONLY-CORE {rel.as_posix()}")
+                if not check:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst.write_bytes(src.read_bytes())
+                    synced += 1
                 continue
             if sha(src) != sha(dst):
                 drifted.append(f"DIFF {rel.as_posix()}")
