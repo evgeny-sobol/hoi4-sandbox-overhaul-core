@@ -72,6 +72,8 @@ SHARED_MISC = [
     ".scratch/scripts/check_if_else.py",
     ".scratch/scripts/check_cw_fuses.py",
     ".scratch/scripts/check_cw_fuses_baseline",
+    ".scratch/scripts/check_economic_posture.py",
+    ".scratch/scripts/check_economic_posture_baseline",
     ".scratch/scripts/check_peak_coverage.py",
     ".scratch/scripts/check_pick_gate.py",
     ".scratch/scripts/extract_sandbox.py",
