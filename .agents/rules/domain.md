@@ -1,4 +1,4 @@
-# Domain Docs
+## Rule: Read the domain docs before exploring
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 

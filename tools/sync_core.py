@@ -5,7 +5,7 @@ Usage (from the core repo root):
   python tools/sync_core.py [--check]
 
 Copies every tracked core file under common/, docs/gdd shared systems,
-.scratch/scripts/extract_sandbox.py, AGENTS.md, docs/agents/,
+.scratch/scripts/extract_sandbox.py, AGENTS.md, .agents/rules/,
 prepare-release.ps1 and .gitattributes into:
   _sandbox and _sandbox-r56 (paths resolved via MODS_ROOT env or the
   default Paradox mod folder layout on this machine).
@@ -78,12 +78,14 @@ SHARED_MISC = [
     ".scratch/scripts/check_pick_gate.py",
     ".scratch/scripts/extract_sandbox.py",
     "AGENTS.md",
-    "docs/agents/characters.md",
-    "docs/agents/domain.md",
-    "docs/agents/external-dirs.md",
-    "docs/agents/issue-tracker.md",
-    "docs/agents/language.md",
-    "docs/agents/triage-labels.md",
+    ".agents/rules/analyze-sandbox-logs.md",
+    ".agents/rules/compile-after-hsl.md",
+    ".agents/rules/consult-gdd.md",
+    ".agents/rules/domain.md",
+    ".agents/rules/external-dirs.md",
+    ".agents/rules/issue-tracker.md",
+    ".agents/rules/sync-core-first.md",
+    ".agents/rules/triage-labels.md",
     "prepare-release.ps1",
     ".gitattributes",
 ]
