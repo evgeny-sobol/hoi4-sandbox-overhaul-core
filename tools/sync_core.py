@@ -53,11 +53,11 @@ TARGETS = [MODS / "_sandbox", MODS / "_sandbox-r56"]
 # Shared GDD systems. Only National Focuses.md is byte-identical between mods;
 # Honor/Civil Wars/Tyranny/Rivals GDDs drift per mod (r56 acceptance checklists
 # are unchecked, plus an r56-only scenario-exemption line) and stay per-mod.
-# The RU mirror of the shared doc syncs alongside it; per-mod RU mirrors live
-# in each mod and never sync.
+# Those per-mod systems carry no RU mirror: the translated copies were dropped
+# on 2026-10-22 and their files stay absent from both mods and from core, so the
+# only RU mirror left is the one for the shared doc below.
 SHARED_GDD = [
     "docs/gdd/National Focuses.md",
-    "docs/gdd/National Focuses - RU.md",
 ]
 
 # Core skeleton reference: lives in core only, never copied (each mod holds a
