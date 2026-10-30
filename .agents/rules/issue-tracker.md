@@ -1,4 +1,4 @@
-# Issue tracker: Local Markdown
+## Rule: Keep issues as local markdown under .scratch/
 
 Issues and specs for this repo live as markdown files in `.scratch/`.
 

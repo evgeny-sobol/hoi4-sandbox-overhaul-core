@@ -5,7 +5,7 @@ Usage (from the core repo root):
   python tools/sync_core.py [--check]
 
 Copies every tracked core file under common/, docs/gdd shared systems,
-.scratch/scripts/extract_sandbox.py, AGENTS.md, docs/agents/,
+.scratch/scripts/extract_sandbox.py, AGENTS.md, .agents/rules/,
 prepare-release.ps1 and .gitattributes into:
   _sandbox and _sandbox-r56 (paths resolved via MODS_ROOT env or the
   default Paradox mod folder layout on this machine).
@@ -53,11 +53,11 @@ TARGETS = [MODS / "_sandbox", MODS / "_sandbox-r56"]
 # Shared GDD systems. Only National Focuses.md is byte-identical between mods;
 # Honor/Civil Wars/Tyranny/Rivals GDDs drift per mod (r56 acceptance checklists
 # are unchecked, plus an r56-only scenario-exemption line) and stay per-mod.
-# The RU mirror of the shared doc syncs alongside it; per-mod RU mirrors live
-# in each mod and never sync.
+# Those per-mod systems carry no RU mirror: the translated copies were dropped
+# on 2026-10-22 and their files stay absent from both mods and from core, so the
+# only RU mirror left is the one for the shared doc below.
 SHARED_GDD = [
     "docs/gdd/National Focuses.md",
-    "docs/gdd/National Focuses - RU.md",
 ]
 
 # Core skeleton reference: lives in core only, never copied (each mod holds a
@@ -78,12 +78,14 @@ SHARED_MISC = [
     ".scratch/scripts/check_pick_gate.py",
     ".scratch/scripts/extract_sandbox.py",
     "AGENTS.md",
-    "docs/agents/characters.md",
-    "docs/agents/domain.md",
-    "docs/agents/external-dirs.md",
-    "docs/agents/issue-tracker.md",
-    "docs/agents/language.md",
-    "docs/agents/triage-labels.md",
+    ".agents/rules/analyze-sandbox-logs.md",
+    ".agents/rules/compile-after-hsl.md",
+    ".agents/rules/consult-gdd.md",
+    ".agents/rules/domain.md",
+    ".agents/rules/external-dirs.md",
+    ".agents/rules/issue-tracker.md",
+    ".agents/rules/sync-core-first.md",
+    ".agents/rules/triage-labels.md",
     "prepare-release.ps1",
     ".gitattributes",
 ]
