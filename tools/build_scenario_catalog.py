@@ -931,12 +931,13 @@ def gen_function_names(spec_id: str) -> dict[str, str]:
 
 def render_peak_gate(names: dict[str, str], number: int, aggressor: str,
                      data: dict, peak_month: int, peak_func: str) -> list[str]:
-    """Peak rung gated on the live path tail (AI aggressors only).
+    """Peak rung gated on the live path tail.
 
-    The rung waits in crises until the AI completes the last focus of the
-    live variant's path; human aggressors and a fallback threshold
-    (peak + 12 months) proceed on schedule. Only completed focuses count:
-    a bypassed tail stalls to the fallback.
+    The rung waits in crises until the AI completes the last focus of the live
+    variant's path, then falls back to a threshold (peak + 12 months). Only
+    completed focuses count: a bypassed tail stalls to the fallback. There is no
+    human-aggressor arm, because the pick never draws a human aggressor
+    (docs/adr/0009).
     """
     out = [
         f"  elif global.sandbox_scenario == {number} and global.sandbox_scenario_phase == 1 and global.sandbox_scenario_arc_months >= {peak_month}:",
@@ -949,8 +950,6 @@ def render_peak_gate(names: dict[str, str], number: int, aggressor: str,
                    else "    else:")
         out.append(f"      {aggressor}:")
         out.append(f"        if has_completed_focus({tail}):")
-        out.extend(_advance_peak(number, peak_func))
-        out.append(f"        elif {aggressor}->is_ai(no):")
         out.extend(_advance_peak(number, peak_func))
         out.append(f"        elif global.sandbox_scenario_arc_months >= {peak_month + 12}:")
         out.extend(_advance_peak(number, peak_func))
@@ -967,16 +966,23 @@ def _advance_peak(number: int, peak_func: str) -> list[str]:
 
 
 def render_roll_variant(names: dict[str, str], number: int, data: dict) -> list[str]:
-    """Variant roll over the spec's declared keys (any count)."""
+    """Variant roll over the spec's declared keys (any count).
+
+    No war filter here: eligibility already refuses an arc whose aggressor is at
+    war with ANY declared target of any variant (issue 04), so every variant of a
+    drawable arc is unpressed by construction. Filtering again would be dead
+    code that silently diverges from the eligibility rule.
+    """
     keys = sorted(data["targets"])
+    last = len(keys) - 1
     out = [
         f"{names['roll_variant']}():",
         f"  if global.sandbox_scenario == {number}:",
-        f"    variant_roll = randi(0, {len(keys) - 1})",
+        f"    variant_roll = randi(0, {last})",
     ]
     for i, variant in enumerate(keys):
         out.append(f"    if variant_roll == {i}:" if i == 0
-                   else f"    elif variant_roll == {i}:" if i < len(keys) - 1
+                   else f"    elif variant_roll == {i}:" if i < last
                    else "    else:")
         out.append(f"      global.&sandbox_target_variant = {i}")
     return out
@@ -1083,9 +1089,38 @@ def render_derail(number: int, aggressor: str, targets: dict[str, list[str]], ga
     return out
 
 
-def render_pick(names: dict[str, str], number: int, aggressor: str, key: str) -> list[str]:
+def render_pick(names: dict[str, str], number: int, aggressor: str, key: str,
+                targets: dict[str, list[str]] | None = None) -> list[str]:
     """Pin branch, eligibility entry and pick log for one arc. Three small
-    functions because the hand dispatcher hosts them at three positions."""
+    functions because the hand dispatcher hosts them at three positions.
+
+    Eligibility has two parts:
+
+    * the aggressor exists and is run by the AI - the director's levers all act
+      on AI countries, so a human aggressor would be an arc nobody drives
+      (docs/adr/0009);
+    * the aggressor is not already at war with ANY declared target, across every
+      variant of the arc (issue 04). Strict, not per variant: an arc that is
+      already at war with one of its declared enemies has lost the ladder for
+      that enemy, and the director would rather skip the arc than hand the
+      session a war it did not ignite.
+
+    The war tests are chained with `and` on the `if` line rather than written as
+    separate body lines. HSL compiles a body-level bare condition (including
+    `NOT:`) OUTSIDE the `limit` block, where it is evaluated as a standalone
+    expression and does not gate the entry at all.
+    """
+    # Union of every declared target across variants, order preserved, no dupes.
+    seen: list[str] = []
+    for targets_of_variant in (targets or {}).values():
+        for target in targets_of_variant:
+            if target not in seen:
+                seen.append(target)
+
+    gate = f"country_exists({aggressor}) and {aggressor}->is_ai(yes)"
+    for target in seen:
+        gate += f" and not {aggressor}->has_war_with({target})"
+
     return [
         f"{names['pin']}():",
         f"  if sandbox_scenario_pin_is_{key}():",
@@ -1093,12 +1128,13 @@ def render_pick(names: dict[str, str], number: int, aggressor: str, key: str) ->
         f"    global.&sandbox_scenario = {number}",
         "",
         f"{names['eligible']}():",
-        f"  if country_exists({aggressor}):",
+        f"  if {gate}:",
         f"    eligible[].add({number})",
         "",
         f"{names['pick_log']}():",
         f"  if global.sandbox_scenario == {number}:",
         f"    $sandbox_log_sc(sc_pick, {key})",
+        "",
     ]
 
 
@@ -1187,7 +1223,7 @@ def render_gen_hsl(specs: list[tuple[str, dict]]) -> str:
         out.append("")
         key = data.get("key", None)
         if isinstance(key, str):
-            out.extend(render_pick(names, number, agg, key))
+            out.extend(render_pick(names, number, agg, key, data.get("targets")))
             out.append("")
             if isinstance(data.get("joiners"), dict) and data["joiners"].get("invite_event"):
                 out.extend(render_joiners(data))

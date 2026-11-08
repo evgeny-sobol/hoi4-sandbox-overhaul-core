@@ -12,3 +12,4 @@ Standing rules live as plain markdown in `.agents/rules/`, one file per rule. Re
 - `analyze-sandbox-logs.md`: read `game.log` through `.scratch/scripts/extract_sandbox.py`.
 
 Global rules in `~/.agents/rules/` (`language.md`, `characters.md`, `git-conventions.md`, `ignore-directories.md`, `python-venv.md`, `no-unauthorized-installations.md`) apply on top; this file does not restate them.
+<!-- lore-attribution-hint: this project is /Users/evgeny/Repos/HoI4/sandbox-mod-core (see /Users/evgeny/Repos/HoI4/sandbox-mod-core/AGENTS.md) -->
