@@ -78,6 +78,7 @@ SHARED_MISC = [
     ".scratch/scripts/check_pick_gate.py",
     ".scratch/scripts/check_peak_timeout_detail.py",
     ".scratch/scripts/check_repick_gate.py",
+    ".scratch/scripts/check_rivalry_delta.py",
     ".scratch/scripts/check_rival_slot_uniqueness.py",
     ".scratch/scripts/check_scorer_self_exclusion.py",
     ".scratch/scripts/extract_sandbox.py",
